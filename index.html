@@ -1,0 +1,4053 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Refonte</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+
+<!-- Preload only the face that sets the whole interface. It is the one font the
+     first paint actually waits on, so it is the one worth a preload; preloading
+     more would just contend for bandwidth with the app itself. -->
+<link rel="preload" href="/fonts/refonte-ui-2.woff2" as="font" type="font/woff2" crossorigin>
+
+<style>
+/* ── The interface face ───────────────────────────────────────────────
+   DIN Round A2, subset to what the interface actually sets and rebuilt with
+   tabular figures. The rebuild was not cosmetic: this face ships no `tnum`
+   and its digits run 823 to 1572 units, so a slider readout counting up
+   would have visibly reflowed and shoved its own row around. All ten digits
+   are now one width with the ink centred.
+
+   font-display:swap — these labels are chrome, not content. Better to show
+   them in a fallback for a moment than to hold the panel empty. */
+@font-face{
+  font-family:'Refonte UI';
+  src:url('/fonts/refonte-ui-2.woff2') format('woff2');
+  font-weight:400;              /* static face: one weight, no synthesis */
+  font-style:normal;
+  font-display:swap;
+}
+</style>
+<script src="/vendor/opentype.min.js"></script>
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   REFONTE — instrument shell.
+   One ink, one paper, hairlines for everything else. The chrome is
+   a control surface: title blocks, labelled cells, a signal chain
+   down the inspector, a status rail at the foot. Nothing rounded
+   except the two things you grab: switches and slider handles.
+   ═══════════════════════════════════════════════════════════════ */
+:root{
+  --paper:#ffffff;
+  --ink:#000000;
+  --ink-70:rgba(0,0,0,.68);
+  --ink-40:rgba(0,0,0,.42);
+  --ink-25:rgba(0,0,0,.25);
+  --line:rgba(0,0,0,.13);
+  --line-2:rgba(0,0,0,.30);
+  --hair:1px solid var(--line);
+  --hair-2:1px solid var(--line-2);
+  /* Every micro-label in the interface rides on --mono. The tail is monospace
+     on purpose: if the woff2 ever fails to load, the fallback still holds the
+     readouts steady rather than letting them jitter mid-drag. */
+  --mono:'Refonte UI',ui-monospace,'SF Mono',Menlo,monospace;
+  --sans:'Refonte UI',system-ui,sans-serif;
+  --r-lg:12px; --r-md:9px; --r-sm:6px; --r-xs:4px;
+  --t:110ms cubic-bezier(.4,0,.2,1);
+  --t2:180ms cubic-bezier(.4,0,.2,1);
+  /* Easing on its own. --t and --t2 carry a duration AND a curve, which is
+     what a transition wants; the animation shorthand reads that duration as a
+     DELAY instead, so `animation:x .18s var(--t)` ran as `.18s 110ms …` and,
+     with no backwards fill, held the element at its finished state for 110ms
+     before snapping back to the start frame. That snap was the flicker. */
+  --ease:cubic-bezier(.4,0,.2,1);
+  --topH:48px;
+}
+[data-theme="dark"]{
+  --paper:#000000;
+  --ink:#ffffff;
+  --ink-70:rgba(255,255,255,.7);
+  --ink-40:rgba(255,255,255,.45);
+  --ink-25:rgba(255,255,255,.28);
+  --line:rgba(255,255,255,.17);
+  --line-2:rgba(255,255,255,.36);
+}
+*{box-sizing:border-box}
+html{height:100%}
+body{
+  margin:0;height:100dvh;overflow:hidden;
+  display:flex;flex-direction:column;
+  background:var(--paper);color:var(--ink);
+  font-family:var(--mono);font-size:11px;font-weight:400;
+  font-variant-ligatures:none;-webkit-font-smoothing:antialiased;
+  transition:background var(--t2),color var(--t2);
+}
+button,input,select,textarea{font:inherit;color:inherit}
+button{-webkit-tap-highlight-color:transparent;border-radius:0}
+:focus-visible{outline:1px solid var(--ink);outline-offset:2px}
+.grow{flex:1;min-width:0}
+
+/* Native scrollbars are off everywhere: even fully styled, Chromium keeps
+   redrawing its own arrows. The bar below is ours — one pill, no chrome,
+   fading in only while the panel is in use. */
+*{scrollbar-width:none}
+::-webkit-scrollbar{width:0;height:0;display:none}
+.sbar{position:fixed;width:5px;z-index:60;opacity:0;pointer-events:none;
+  transition:opacity .22s var(--t)}
+.sbar.on{opacity:1;pointer-events:auto}
+.sbar-thumb{width:5px;min-height:26px;border-radius:999px;background:var(--ink-25);
+  cursor:grab;transition:background var(--t)}
+.sbar:hover .sbar-thumb{background:var(--ink-40)}
+.sbar-thumb.drag{background:var(--ink);cursor:grabbing}
+
+/* Micro label — the whole interface speaks in these. */
+.k,.tab{font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-40);
+  white-space:nowrap;font-weight:400}
+.tab{color:var(--ink)}
+
+@keyframes riseIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+/* The wordmark used to ride Archivo's variable width axis, 62 -> 125. It is
+   outlines now, so there is no axis to drive; scaleX is the honest analogue —
+   the same gesture of the mark opening out, done to the geometry instead. */
+@keyframes markIn{from{transform:scaleX(.55);opacity:0}
+                  to{transform:scaleX(1);opacity:1}}
+@keyframes dropIn{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
+
+/* ── Top rail ───────────────────────────────── */
+.topbar{flex:none;height:var(--topH);display:flex;align-items:center;gap:14px;
+  padding:0 16px}
+.mark{display:flex;align-items:center;gap:10px;cursor:default;user-select:none}
+.mark-name{display:block;line-height:0;
+  transform-origin:left center;
+  animation:markIn .8s cubic-bezier(.2,.8,.2,1) both;
+  transition:transform .45s cubic-bezier(.2,.8,.2,1)}
+/* Sized by height; the viewBox carries the 6.8:1 ratio, so width follows. */
+.mark-name svg{height:17px;width:auto;display:block;fill:currentColor}
+.mark:hover .mark-name{transform:scaleX(.62)}
+.mark-sub{font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-40)}
+
+/* ── Buttons ────────────────────────────────── */
+.btn{appearance:none;background:none;border:var(--hair-2);border-radius:var(--r-sm);
+  height:28px;padding:0 12px;
+  display:inline-flex;align-items:center;gap:9px;cursor:pointer;
+  font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;
+  transition:background var(--t),color var(--t),border-color var(--t)}
+.btn .ico{width:9px;height:9px;display:block;flex:none;
+  transition:transform var(--t2)}
+.btn .ico svg{width:100%;height:100%;display:block;fill:currentColor}
+.btn:hover:not(:disabled){background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.btn:active:not(:disabled){opacity:.75}
+.btn:disabled{color:var(--ink-25);border-color:var(--line);cursor:default}
+.btn.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.btn.on .ico,.btn:hover .ico.plus{transform:rotate(45deg)}
+.btn:hover .ico.arrow{transform:translate(2px,-2px)}
+
+/* ── Layout ─────────────────────────────────── */
+.app{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 286px}
+.main{min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px;
+  display:flex;flex-direction:column;gap:12px;
+  overscroll-behavior:contain}
+.main > *{flex:0 0 auto}
+.side{min-height:0;display:flex;padding:14px 14px 14px 0}
+.sidepanel{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+/* Only the effect list scrolls — sources stay at the head, exports at the
+   foot, both inside the same rounded block. */
+.fxscroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+
+
+/* Every framed block wears a title block on its top rule. */
+.panel{border:var(--hair-2);border-radius:var(--r-lg);overflow:hidden;animation:riseIn .5s cubic-bezier(.2,.8,.2,1) both}
+.panel:nth-of-type(2){animation-delay:.06s}
+.panel-bar{height:26px;display:flex;align-items:center;gap:12px;padding:0 11px;
+  border-bottom:var(--hair)}
+.panel-bar .k{color:var(--ink-40)}
+
+/* ── Stage ──────────────────────────────────── */
+.stage{position:relative}
+.canvasbox{height:440px;min-height:240px;position:relative;cursor:text;overflow:hidden}
+.canvasbox svg.preview-svg{position:absolute;inset:0;width:100%;height:100%;
+  pointer-events:none;display:block}
+.canvasbox .editor{position:absolute;inset:0;width:100%;height:100%;
+  background:transparent;color:transparent;caret-color:var(--ink);
+  border:none;outline:none;resize:none;
+  font-family:'glyphlab-font',system-ui,sans-serif;font-weight:400;
+  overflow-x:hidden;overflow-y:auto;scrollbar-width:none;
+  white-space:pre-wrap;overflow-wrap:break-word;word-break:break-word;
+  font-kerning:none;font-variant-ligatures:none;font-feature-settings:normal}
+.canvasbox .editor::-webkit-scrollbar{width:0;height:0}
+.canvasbox .editor::selection{background:var(--ink-25)}
+.canvasbox .clear-btn{position:absolute;top:10px;right:10px;width:24px;height:24px;
+  border:var(--hair-2);border-radius:var(--r-sm);background:var(--paper);color:var(--ink-40);cursor:pointer;
+  font-size:13px;line-height:1;padding:0;display:none;
+  align-items:center;justify-content:center;opacity:0;
+  transition:opacity var(--t),background var(--t),color var(--t),border-color var(--t)}
+.canvasbox .clear-btn.on{display:flex;opacity:1}
+.canvasbox .clear-btn:hover{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+
+/* ── Control strip ──────────────────────────── */
+.ctrl{position:relative;flex:none;display:flex;align-items:stretch;flex-wrap:wrap;
+  border:var(--hair-2);border-radius:var(--r-lg);min-height:44px;
+  animation:riseIn .5s cubic-bezier(.2,.8,.2,1) .03s both}
+.ctrl-item{display:flex;align-items:center;gap:10px;padding:0 14px;min-height:42px;
+  border-right:var(--hair);white-space:nowrap}
+.ctrl-item label{font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-40)}
+.ctrl .spacer{flex:1;min-width:0;border-right:none}
+.ctrl .ctrl-btn{margin:0;border:none;border-left:var(--hair);height:auto;align-self:stretch;
+  padding:0 16px;border-radius:0 calc(var(--r-lg) - 1px) calc(var(--r-lg) - 1px) 0}
+.ctrl .ctrl-btn.open{background:var(--ink);color:var(--paper)}
+.ctrl .ctrl-btn.open .ico{transform:rotate(45deg)}
+
+/* Numeric field */
+.numspin{display:inline-flex;align-items:center;height:24px;border:var(--hair-2);
+  border-radius:var(--r-sm);overflow:hidden;padding-left:7px;transition:border-color var(--t)}
+.numspin:focus-within{border-color:var(--ink)}
+.numspin input{width:38px;border:none;background:none;padding:0;outline:none;
+  font-size:11px;font-variant-numeric:tabular-nums;letter-spacing:.02em;
+  -moz-appearance:textfield}
+.numspin input::-webkit-outer-spin-button,.numspin input::-webkit-inner-spin-button{
+  -webkit-appearance:none;margin:0}
+.numspin .unit{font-size:8.5px;color:var(--ink-40);padding:0 5px 0 1px;letter-spacing:.1em}
+.numspin .spin{display:flex;flex-direction:column;align-self:stretch;border-left:var(--hair)}
+.numspin .spin button{width:15px;flex:1;border:none;background:none;padding:0;cursor:pointer;
+  color:var(--ink-40);font-size:5px;line-height:1;display:flex;align-items:center;
+  justify-content:center;transition:background var(--t),color var(--t)}
+.numspin .spin button:first-child{border-bottom:var(--hair)}
+.numspin .spin button:hover{background:var(--ink);color:var(--paper)}
+
+/* Colour chips */
+.swatch{width:20px;height:20px;border:1px solid var(--ink);border-radius:var(--r-xs);
+  cursor:pointer;display:block;
+  transition:box-shadow var(--t)}
+.swatch:hover{box-shadow:0 0 0 2px var(--paper),0 0 0 3px var(--ink)}
+.swatch.checker{background:conic-gradient(var(--line-2) 25%,var(--paper) 0 50%,
+  var(--line-2) 0 75%,var(--paper) 0) 0 0/8px 8px}
+
+/* Segmented sets — shape sets, alignment, colour mode */
+.seg,.align-group{display:flex;border:var(--hair-2);border-radius:var(--r-sm);overflow:hidden}
+.seg{flex-wrap:wrap}
+.seg button,.align-group button{flex:1;min-width:0;border:none;border-left:var(--hair);
+  background:none;color:var(--ink-40);height:24px;padding:0 9px;cursor:pointer;
+  font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;white-space:nowrap;
+  display:flex;align-items:center;justify-content:center;
+  transition:background var(--t),color var(--t)}
+.seg button:first-child,.align-group button:first-child{border-left:none}
+.seg button:hover,.align-group button:hover{color:var(--ink)}
+.seg button.on,.align-group button.on{background:var(--ink);color:var(--paper)}
+.align-group button{width:28px;flex:none;padding:0}
+.align-group button svg{width:12px;height:12px;display:block;fill:currentColor}
+
+/* Colour picker popover — fixed so it escapes every stacking context */
+.cpick{position:fixed;z-index:200;width:218px;display:none;
+  background:var(--paper);border:1px solid var(--ink);border-radius:var(--r-lg);padding:12px;
+  box-shadow:0 4px 24px rgba(0,0,0,.18)}
+.cpick.open{display:block;animation:dropIn .16s var(--ease)}
+.cpick .cp-top{display:flex;align-items:center;margin-bottom:11px}
+.cpick .cp-name{font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-40)}
+.cpick .cp-preview{width:18px;height:18px;border:1px solid var(--ink);
+  border-radius:var(--r-xs);margin-left:auto}
+.cpick .seg{margin-bottom:12px}
+.cpick .cp-row{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+.cpick .cp-row .k{width:11px;flex:none;color:var(--ink)}
+.cpick .cp-row input[type=range]{flex:1}
+.cpick .cp-row .v{width:28px;text-align:right;font-size:10px;flex:none;
+  font-variant-numeric:tabular-nums}
+.cpick .cp-hex{display:flex;align-items:center;height:26px;margin-top:10px;padding:0 8px;
+  border:var(--hair-2);border-radius:var(--r-sm);transition:border-color var(--t)}
+.cpick .cp-hex:focus-within{border-color:var(--ink)}
+.cpick .cp-hex span{color:var(--ink-40)}
+.cpick .cp-hex input{flex:1;min-width:0;border:none;background:none;outline:none;
+  font-size:11px;letter-spacing:.1em;text-transform:uppercase;padding-left:4px}
+.cpick .cp-alpha{margin-top:10px;margin-bottom:0}
+.cpick .cp-preview.checker{background:conic-gradient(var(--line-2) 25%,var(--paper) 0 50%,
+  var(--line-2) 0 75%,var(--paper) 0) 0 0/6px 6px}
+
+/* ── Specimen grid ──────────────────────────── */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(74px,1fr));
+  border-left:var(--hair);border-top:var(--hair)}
+.cell{aspect-ratio:1;border-right:var(--hair);border-bottom:var(--hair);position:relative}
+.cell svg{position:absolute;inset:0;width:100%;height:100%}
+/* The character each cell is proofing — on tap of the mouse only, so the
+   sheet stays a specimen rather than a table. */
+.cell::after{content:attr(data-ch);position:absolute;left:5px;bottom:3px;font-size:7.5px;
+  color:var(--ink-40);opacity:0;transition:opacity var(--t);pointer-events:none}
+.cell:hover::after{opacity:1}
+
+/* ── Inspector ──────────────────────────────── */
+.load-row{flex:none;display:flex;gap:8px;padding:10px;border-bottom:var(--hair-2)}
+.load-row .btn{flex:1;min-width:0;height:32px;justify-content:center;padding:0 8px}
+.svg-chip{display:none;align-items:center;gap:8px;height:20px;padding:0 8px;cursor:pointer;
+  border:var(--hair-2);border-radius:var(--r-xs);background:none;color:var(--ink);
+  font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;max-width:60%;
+  transition:background var(--t),color var(--t),border-color var(--t)}
+.svg-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.svg-chip:hover{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+body.artwork .svg-chip{display:inline-flex}
+body.artwork .stage .panel-bar .k{display:none}
+body.artwork .canvasbox .editor,body.artwork .canvasbox .clear-btn{display:none}
+body.artwork #specimen{display:none}
+.effects-btn{position:relative;flex:none;width:100%;height:34px;
+  border:none;border-bottom:var(--hair-2);background:var(--paper);
+  display:flex;align-items:center;justify-content:space-between;padding:0 12px;cursor:pointer;
+  font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;
+  transition:background var(--t),color var(--t)}
+.effects-btn .ico{width:9px;height:9px;display:block;transition:transform var(--t2)}
+.effects-btn .ico svg{width:100%;height:100%;display:block;fill:currentColor}
+.effects-btn:hover{background:var(--ink);color:var(--paper)}
+.effects-btn:hover .ico,.effects-btn.open .ico{transform:rotate(45deg)}
+.effects-btn.open{background:var(--ink);color:var(--paper)}
+
+/* The effects list hangs off the button and floats OVER the chain below it,
+   rather than sitting in the flow and shoving every card down the panel.
+   .fxhead is the anchor and carries the z-index: the cards are position:
+   relative, so they are positioned descendants too and would otherwise paint
+   over a picker that merely came earlier in the document. */
+.fxhead{position:relative;flex:none;z-index:30}
+.picker{position:absolute;top:100%;left:0;right:0;display:none;
+  background:var(--paper);border-bottom:var(--hair-2);
+  max-height:min(58vh,340px);overflow-y:auto;
+  box-shadow:0 12px 22px rgba(0,0,0,.13)}
+.picker.open{display:block;animation:dropIn .18s var(--ease)}
+.picker-item{position:relative;display:flex;align-items:center;width:100%;height:30px;
+  padding:0 10px;border:none;border-bottom:var(--hair);background:none;color:inherit;
+  text-align:left;font-size:9px;letter-spacing:.2em;cursor:pointer;
+  transition:background var(--t),color var(--t),padding-left var(--t2)}
+.picker-item:last-child{border-bottom:none}
+.picker-item::after{content:"+";position:absolute;right:12px;opacity:0;
+  transition:opacity var(--t)}
+.picker-item:hover{background:var(--ink);color:var(--paper);padding-left:18px}
+.picker-item:hover::after{opacity:1}
+.picker-item.added{color:var(--ink-25);pointer-events:none}
+
+/* Signal chain: outlines in at the top, result out at the foot, every
+   active effect a numbered node on the line between them. The order is
+   the order they are applied — the line is the pipeline. */
+.fx{counter-reset:fx;padding:10px}
+.fx-empty{padding:14px 12px;border:1px dashed var(--line-2);border-radius:var(--r-md);
+  font-size:9.5px;line-height:1.6;color:var(--ink-40)}
+.fx:has(.card) .fx-empty{display:none}
+
+.stack{display:flex;flex-direction:column;gap:8px}
+.stack:empty{display:none}
+.stack:not(:empty){margin-bottom:8px}
+.card{position:relative;background:var(--paper);counter-increment:fx;
+  border:var(--hair-2);border-radius:var(--r-md);overflow:hidden}
+.card-head{display:flex;align-items:center;gap:9px;padding:8px 10px;user-select:none}
+.card-head::before{content:counter(fx,decimal-leading-zero);flex:none;font-size:8.5px;
+  letter-spacing:.06em;color:var(--ink-40);transition:color var(--t)}
+.card-head .title{flex:1;font-size:9px;letter-spacing:.2em;text-transform:uppercase;
+  transition:color var(--t)}
+.card-head.off::before,.card-head.off .title{color:var(--ink-25)}
+
+/* Switch and slider handles are the only round things here — they are the
+   only two you physically grab. */
+.sw{width:30px;height:16px;border-radius:999px;position:relative;flex:none;cursor:pointer;
+  border:1px solid var(--ink);background:none;transition:background var(--t)}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;
+  border-radius:50%;background:var(--ink);
+  transition:left var(--t2),background var(--t)}
+.sw.on{background:var(--ink)}
+.sw.on::after{left:16px;background:var(--paper)}
+
+.icobtn{width:22px;height:22px;border:none;border-radius:var(--r-xs);background:none;
+  color:var(--ink-40);cursor:pointer;
+  padding:0;display:flex;align-items:center;justify-content:center;flex:none;
+  transition:color var(--t),background var(--t)}
+.icobtn:hover{color:var(--paper);background:var(--ink)}
+.icobtn svg{width:11px;height:11px;display:block}
+
+.card-body{display:none;border-top:var(--hair);padding:11px 10px 12px}
+.card.open .card-body{display:block;animation:dropIn .18s var(--ease)}
+
+/* Baked — the recipe stays readable, nothing in it answers. */
+.card.baked{border-style:dashed}
+.card.baked .card-head::before{color:var(--ink-40)}
+.card.baked .card-head .title{color:var(--ink-40)}
+.card.baked .lockmark{width:22px;height:22px;display:flex;align-items:center;
+  justify-content:center;color:var(--ink-40);flex:none}
+.card.baked .lockmark svg{width:12px;height:12px}
+.baked-note{font-size:9.5px;line-height:1.6;color:var(--ink-40);margin:0 0 10px}
+.baked-note.dim{margin-bottom:0}
+.undo-btn{width:100%;height:28px;border:var(--hair-2);border-radius:var(--r-sm);
+  background:none;color:inherit;
+  cursor:pointer;margin-bottom:12px;font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;
+  transition:background var(--t),color var(--t),border-color var(--t)}
+.undo-btn:hover{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.frozen{opacity:.4;pointer-events:none}
+
+/* ── Controls inside a card ─────────────────── */
+.opt{margin-bottom:11px}
+.opt:last-child{margin-bottom:0}
+.opt label,.opt-label{display:flex;justify-content:space-between;align-items:baseline;
+  font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-40);
+  margin-bottom:4px}
+.opt label span{color:var(--ink);font-variant-numeric:tabular-nums;font-size:10px;
+  letter-spacing:.02em;text-transform:none}
+.opt input[type=range]{width:100%}
+input[type=range]{-webkit-appearance:none;appearance:none;background:none;height:14px;
+  width:100%;margin:0;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:1px;background:var(--line-2)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;
+  border-radius:50%;background:var(--paper);border:1px solid var(--ink);margin-top:-5px;
+  transition:background var(--t)}
+input[type=range]:hover::-webkit-slider-thumb,
+input[type=range]:active::-webkit-slider-thumb{background:var(--ink)}
+input[type=range]::-moz-range-track{height:1px;background:var(--line-2)}
+input[type=range]::-moz-range-thumb{width:10px;height:10px;border-radius:50%;
+  background:var(--paper);border:1px solid var(--ink)}
+
+.filebtn{display:block;height:28px;line-height:26px;text-align:center;cursor:pointer;
+  border:1px dashed var(--line-2);border-radius:var(--r-sm);margin:0 0 11px;font-size:8.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-40);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;padding:0 8px;
+  transition:background var(--t),color var(--t),border-color var(--t)}
+.filebtn:hover{background:var(--ink);color:var(--paper);border-color:var(--ink);
+  border-style:solid}
+.hint{font-size:9.5px;color:var(--ink-40);line-height:1.6;margin:4px 0 0}
+.muted{opacity:.4}
+.numinput-row{display:flex;justify-content:space-between;align-items:center}
+.numinput-row .lbl{font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-40)}
+.numinput-row .numspin input{width:40px}
+
+/* ── Distort widget ─────────────────────────── */
+.warp{margin:0 0 11px}
+.warp-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.warp-head .warp-title{font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-40)}
+.warp-head .warp-readout{font-size:9px;color:var(--ink);font-variant-numeric:tabular-nums;
+  margin-left:auto;white-space:nowrap}
+.warp-head .warp-reset{width:20px;height:20px;border:none;border-radius:var(--r-xs);
+  background:none;color:var(--ink-40);
+  cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;
+  transition:color var(--t),background var(--t)}
+.warp-head .warp-reset:hover{color:var(--paper);background:var(--ink)}
+.warp-head .warp-reset svg{width:12px;height:12px;display:block}
+.warp-svg{width:100%;aspect-ratio:1;border:var(--hair-2);border-radius:var(--r-md);
+  background:none;display:block;
+  touch-action:none}
+.warp-svg .grid-dot{fill:var(--ink);opacity:.16}
+.warp-svg .warp-shape{fill:var(--ink);pointer-events:none}
+.warp-svg .warp-edge{fill:none;stroke:var(--ink);stroke-width:.7;stroke-dasharray:2.5 2.5;
+  opacity:.45;pointer-events:none}
+.warp-svg .warp-handle{fill:var(--paper);stroke:var(--ink);stroke-width:1.2;cursor:grab}
+.warp-svg .warp-handle.rot{fill:var(--paper);stroke:var(--ink);stroke-width:1.2;cursor:grab}
+.warp-svg .warp-handle:hover,.warp-svg .warp-handle.dragging,
+.warp-svg .warp-handle.rot:hover,.warp-svg .warp-handle.rot.dragging{
+  fill:var(--ink);cursor:grabbing}
+.warp-svg .warp-rot-stem{stroke:var(--ink);stroke-width:.7;opacity:.35}
+.warp-hint{font-size:8.5px;color:var(--ink-40);line-height:1.5;margin:6px 0 0;
+  text-align:center;letter-spacing:.06em}
+
+/* ── Export ─────────────────────────────────── */
+.export-row{flex:none;display:flex;gap:8px;padding:10px;border-top:var(--hair-2)}
+.export-row .btn{flex:1;height:34px;justify-content:space-between;padding:0 10px}
+
+/* ── Montage timeline ───────────────────────── */
+.tl{display:none;border:var(--hair-2);border-radius:var(--r-lg);overflow:hidden;flex:none}
+.tl.open{display:block;animation:dropIn .2s var(--ease)}
+.tl-top{display:flex;align-items:center;gap:12px;height:28px;padding:0 12px;
+  border-bottom:var(--hair)}
+.tl-title{font-size:8.5px;letter-spacing:.2em;text-transform:uppercase}
+.tl-time{font-size:10px;color:var(--ink-40);font-variant-numeric:tabular-nums}
+.tl-spacer{flex:1;min-width:6px}
+.tl-x{width:22px;height:22px;border:none;border-radius:var(--r-xs);background:none;
+  color:var(--ink-40);cursor:pointer;
+  font-size:11px;line-height:1;padding:0;display:flex;align-items:center;justify-content:center;
+  transition:color var(--t),background var(--t)}
+.tl-x:hover{color:var(--paper);background:var(--ink)}
+.tl-bar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;row-gap:9px;padding:10px 12px}
+.tl-transport{display:flex}
+.tl-btn{border:var(--hair-2);border-radius:var(--r-sm);background:none;color:inherit;
+  height:26px;min-width:26px;
+  padding:0 11px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:none;
+  font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;
+  transition:background var(--t),color var(--t),border-color var(--t)}
+.tl-transport{gap:5px}
+.tl-btn:hover:not(:disabled){background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.tl-btn:disabled{color:var(--ink-25);border-color:var(--line);cursor:default}
+.tl-btn.primary{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.tl-btn.primary:hover:not(:disabled){background:var(--paper);color:var(--ink)}
+.tl-btn.primary:disabled{background:none;color:var(--ink-25);border-color:var(--line)}
+.tl-fields{display:flex;align-items:center;gap:16px;flex-wrap:wrap;row-gap:9px}
+.tl-field{display:flex;align-items:center;gap:8px}
+.tl-field > .k{color:var(--ink-40)}
+.tl-field select{background:none;color:inherit;height:24px;padding:0 22px 0 8px;
+  font-size:10px;outline:none;cursor:pointer;border:var(--hair-2);border-radius:var(--r-sm);
+  -webkit-appearance:none;appearance:none;
+  background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),
+                   linear-gradient(135deg,currentColor 50%,transparent 50%);
+  background-position:calc(100% - 12px) 52%,calc(100% - 8px) 52%;
+  background-size:4px 4px,4px 4px;background-repeat:no-repeat;
+  transition:border-color var(--t)}
+.tl-field select:hover{border-color:var(--ink)}
+.tl-field .numspin input{width:38px}
+.tl-track{position:relative;padding:0 14px;cursor:col-resize;touch-action:none;
+  border-top:var(--hair);border-bottom:var(--hair)}
+.tl-inner{position:relative;height:72px}
+.tl-ruler{position:relative;height:20px;border-bottom:var(--hair)}
+.tl-tick{position:absolute;top:11px;bottom:0;width:0;border-left:1px solid var(--line-2)}
+.tl-tick span{position:absolute;left:5px;top:-11px;font-size:8px;color:var(--ink-40);
+  white-space:nowrap;letter-spacing:.08em}
+.tl-tick.last span{left:auto;right:3px}
+.tl-lane{position:relative;height:52px}
+.tl-guide{position:absolute;left:0;right:0;top:25px;height:1px;background:var(--line)}
+.tl-span{position:absolute;top:25px;height:1px;background:var(--ink)}
+.tl-key{position:absolute;top:19px;width:12px;height:12px;margin-left:-6px;
+  background:var(--paper);border:1px solid var(--ink);transform:rotate(45deg);cursor:grab;
+  transition:background var(--t)}
+.tl-key:hover{background:var(--ink)}
+.tl-key.sel{background:var(--ink);box-shadow:0 0 0 2px var(--paper),0 0 0 3px var(--ink)}
+.tl-key:active{cursor:grabbing}
+.tl-head{position:absolute;top:0;bottom:0;width:0;border-left:1px solid var(--ink);
+  pointer-events:none}
+.tl-head::before{content:"";position:absolute;top:0;left:-4px;width:8px;height:8px;
+  background:var(--ink);clip-path:polygon(0 0,100% 0,50% 100%)}
+.tl-foot{display:flex;align-items:center;gap:10px;padding:10px 12px}
+.tl-prog{font-size:9.5px;color:var(--ink-40);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;min-width:0}
+.tl-hint{font-size:9.5px;color:var(--ink-40);margin:0;padding:0 12px 12px;line-height:1.6}
+
+/* ── Status rail ────────────────────────────── */
+.status{flex:none;height:26px;display:flex;align-items:stretch;border-top:var(--hair-2);
+  font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-40)}
+.status .st{display:flex;align-items:center;gap:8px;padding:0 14px;border-right:var(--hair);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:42vw}
+.status .st:last-child{border-right:none;border-left:var(--hair);margin-left:auto}
+.status .st b{font-weight:400;color:var(--ink-25)}
+.status .st > span{color:var(--ink);letter-spacing:.1em}
+
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition-duration:.01ms !important;animation-duration:.01ms !important}
+}
+@media(max-height:760px){
+  .canvasbox{height:320px}
+}
+@media(max-width:1200px){
+  .app{grid-template-columns:minmax(0,1fr) 268px}
+}
+@media(max-width:1020px){
+  html,body{height:auto;overflow:visible}
+  body{min-height:100dvh}
+  .app{grid-template-columns:1fr}
+  .main{overflow:visible}
+  .side{padding:0 14px 14px}
+  .sidepanel{height:auto}
+  .fxscroll{overflow:visible}
+  /* Here the panel is only as tall as its content, so an overlaid picker would
+     be cut off by .sidepanel's overflow:hidden — with an empty chain the panel
+     is barely 200px and the list is taller than that. The page scrolls as one
+     on this breakpoint, so putting the list back in the flow costs nothing and
+     keeps every entry reachable. */
+  .picker{position:static;max-height:none;box-shadow:none}
+  .status{position:sticky;bottom:0;background:var(--paper);z-index:20}
+  .status .st{max-width:none}
+}
+@media(max-width:560px){
+  .mark-sub{display:none}
+  .ctrl .ctrl-btn{width:100%;border-left:none;border-top:var(--hair);
+    justify-content:space-between;min-height:42px}
+  .ctrl .spacer{display:none}
+  .status .st:nth-child(2){display:none}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="mark">
+    <!-- The wordmark, inlined rather than <img>: it inherits currentColor, so
+         it flips with the light/dark theme for free and costs no extra request.
+         Retightened onto its own ink — the original export's viewBox stopped at
+         11185 while the outlines ran to 11778, clipping the final E. -->
+    <span class="mark-name" id="logo">
+      <svg viewBox="-46.7 -1512.8 11918.5 1751.0" role="img" aria-label="Refonte">
+        <g transform="scale(1,-1)" fill="currentColor">
+    <path d="M1114.4 1402.9L1755.1 1408.2L1845.3 1404.7L1911.7 1395.7L1989.2 1370.3L2045.4 1331.2L2082.7 1280.0L2103.4 1208.3L2104.5 1157.1L2095.1 1095.7L2076.1 1034.2L2048.5 972.8L2006.2 901.1L1961.3 839.7L1908.0 778.2L1845.2 716.8L1736.3 630.7L1671.6 589.6L1612.1 557.4L1543.0 526.4L1473.3 501.8L1288.5 458.1L1243.2 432.9L1212.4 399.4L1191.0 358.4L1179.3 317.4L1179.1 286.4L1194.1 259.2L1234.8 241.0L1339.6 227.4L1392.4 212.3L1431.6 184.3L1447.6 148.4L1447.7 122.9L1440.0 92.2L1419.8 51.2L1398.4 20.5L1347.4 -30.7L1277.9 -74.5L1224.5 -96.1L1158.1 -112.6L1087.7 -120.3L1015.8 -120.7L947.7 -114.4L884.2 -100.3L834.8 -79.5L798.4 -53.8L773.4 -26.1L754.1 10.2L743.9 51.2L742.0 92.2L755.2 174.1L805.4 327.7L808.2 378.9L797.5 405.8L778.2 425.5L746.5 441.7L701.2 451.8L669.3 449.8L644.3 442.0L613.6 424.4L586.0 399.4L555.6 358.4L453.5 184.3L398.2 102.4L335.6 31.4L277.2 -16.5L245.7 -35.6L204.5 -53.7L168.5 -62.9L126.1 -65.4L97.9 -61.0L73.8 -49.6L55.4 -28.3L47.1 0.0L48.7 41.0L59.0 81.9L111.1 194.6L592.9 1034.2L642.9 1116.2L685.9 1177.6L728.9 1228.8L778.2 1276.9L821.2 1310.7L871.2 1341.4L920.8 1364.2L983.7 1384.5L1041.5 1396.0ZM1024.2 1046.9L985.0 1034.2L939.7 1003.5L912.3 972.8L880.2 921.6L862.3 880.6L859.6 849.9L872.1 829.4L902.3 817.8L1351.5 815.6L1478.3 822.4L1537.5 836.1L1578.8 854.5L1617.3 880.6L1656.2 921.6L1677.6 962.6L1679.4 1003.5L1659.6 1030.0L1626.3 1043.1L1497.5 1050.7L1077.8 1051.0Z"/>
+    <path d="M2637.0 1402.9L2781.7 1410.7L3609.8 1408.3L3676.4 1399.5L3719.0 1384.6L3749.3 1361.9L3767.2 1326.2L3767.1 1290.2L3753.8 1249.3L3730.7 1208.3L3697.9 1167.4L3664.7 1136.6L3620.5 1105.9L3575.6 1083.1L3525.2 1065.0L3454.0 1049.9L3357.8 1042.9L2629.7 1041.0L2582.6 1030.3L2551.1 1013.8L2516.6 983.0L2487.1 942.1L2467.1 901.1L2461.7 870.4L2468.8 851.0L2491.7 837.4L2530.0 832.9L3012.0 834.1L3112.1 830.2L3159.0 822.6L3197.5 809.0L3223.0 791.6L3240.7 768.0L3248.0 737.3L3244.8 706.6L3229.4 665.6L3204.6 624.6L3169.6 583.7L3134.1 553.0L3088.8 523.7L3046.4 503.5L2971.7 480.5L2872.3 467.9L2327.4 464.2L2273.2 459.0L2226.7 440.3L2189.0 409.6L2151.8 358.4L2126.4 307.2L2121.1 276.5L2127.0 259.0L2140.9 247.6L2167.5 240.5L2903.4 238.1L2981.6 231.6L3039.9 215.0L3072.0 193.1L3090.1 163.8L3094.1 133.1L3085.4 92.2L3059.1 41.0L3027.5 0.0L2982.9 -41.0L2935.8 -71.7L2885.0 -95.3L2834.9 -111.2L2777.3 -122.3L2712.6 -127.8L1841.8 -128.6L1754.1 -120.8L1693.1 -102.4L1651.2 -71.7L1630.7 -30.7L1627.8 10.2L1636.8 61.4L1654.6 112.6L1688.8 184.3L2163.5 1013.8L2246.0 1146.9L2284.4 1198.1L2330.0 1249.0L2374.9 1290.2L2415.9 1321.0L2468.3 1351.7L2514.7 1372.2L2575.9 1391.3Z"/>
+    <path d="M4224.4 1402.9L4306.4 1410.4L4409.8 1412.0L5136.7 1411.8L5255.2 1404.2L5323.8 1381.1L5344.7 1364.1L5359.2 1341.4L5364.4 1321.0L5362.9 1289.2L5353.9 1259.5L5332.8 1218.6L5311.0 1187.8L5282.9 1157.1L5250.0 1129.2L5216.7 1106.9L5146.5 1074.1L5062.4 1052.6L4923.9 1043.3L4237.5 1042.7L4192.7 1035.9L4151.3 1017.6L4111.5 983.0L4071.1 921.6L4057.3 872.4L4072.2 845.1L4097.8 836.2L4127.2 833.9L4660.0 834.4L4728.6 829.1L4773.9 818.9L4825.2 788.5L4845.2 747.2L4844.6 716.8L4836.0 686.1L4815.3 645.1L4794.0 614.4L4743.7 563.2L4685.7 524.2L4617.4 494.6L4545.8 476.9L4417.2 467.1L3914.6 465.6L3870.9 460.9L3839.5 450.6L3798.3 423.9L3766.9 389.1L3619.0 143.4L3574.3 81.9L3528.0 30.7L3472.5 -16.3L3412.8 -51.2L3360.3 -68.8L3306.4 -73.5L3278.0 -69.5L3253.3 -59.0L3234.6 -41.0L3225.0 -20.5L3221.0 9.2L3224.2 41.0L3247.2 112.6L3316.4 245.8L3807.4 1095.7L3855.6 1167.4L3896.5 1218.6L3946.0 1269.8L3995.6 1310.7L4042.9 1341.4L4097.8 1368.2L4161.4 1389.8Z"/>
+    <path d="M6245.8 1413.1L6326.8 1419.0L6407.5 1416.8L6483.3 1406.1L6545.3 1389.5L6603.3 1365.6L6656.7 1334.0L6705.0 1293.6L6741.6 1250.5L6772.6 1198.1L6792.4 1146.9L6805.7 1085.4L6810.1 1024.0L6805.7 952.3L6792.5 880.6L6771.4 809.0L6743.0 737.3L6702.1 655.4L6659.1 583.7L6609.2 512.0L6546.0 432.9L6488.0 368.6L6415.5 297.0L6334.2 225.7L6255.0 163.8L6173.6 107.1L6082.8 51.2L5989.5 1.1L5905.6 -37.9L5812.8 -74.4L5724.9 -102.5L5641.3 -123.2L5550.6 -138.3L5475.4 -144.4L5394.1 -143.4L5317.7 -133.7L5255.1 -118.1L5190.0 -92.2L5137.5 -61.4L5093.4 -25.7L5052.7 20.5L5021.7 71.7L4999.0 130.1L4985.8 194.6L4982.3 256.0L4987.5 327.7L5001.5 399.4L5023.2 471.0L5052.1 542.7L5093.7 624.6L5137.3 696.3L5187.7 768.0L5245.1 839.7L5310.0 911.4L5383.1 983.0L5465.6 1054.7L5545.1 1116.2L5634.5 1177.5L5719.3 1228.8L5802.3 1273.1L5899.8 1317.9L5991.9 1353.1L6079.2 1380.2L6162.2 1399.8ZM6058.2 1024.6L5964.5 1004.2L5873.1 970.1L5785.1 924.1L5700.4 866.0L5623.3 798.7L5558.3 727.0L5501.1 645.1L5460.4 563.2L5439.3 491.5L5434.6 423.4L5445.7 368.6L5475.8 317.4L5524.8 278.0L5583.3 255.3L5659.6 245.5L5744.9 251.3L5827.4 270.0L5918.7 304.1L6006.6 349.9L6093.7 409.6L6174.9 481.3L6238.8 553.0L6288.7 624.6L6330.3 706.6L6352.3 778.2L6357.8 849.9L6344.2 911.4L6316.1 956.9L6267.1 996.2L6208.5 1019.0L6142.3 1028.5Z"/>
+    <path d="M7416.1 1372.2L7470.7 1373.2L7515.4 1361.8L7552.5 1337.5L7579.0 1300.5L7787.6 609.5L7801.1 579.7L7822.2 563.0L7832.6 563.4L7851.5 573.4L7872.6 593.9L7895.9 624.6L8186.3 1116.2L8244.1 1198.1L8300.6 1259.5L8336.7 1290.2L8383.1 1321.0L8424.4 1340.0L8472.5 1352.4L8514.4 1354.1L8550.8 1346.1L8573.4 1331.2L8590.5 1300.5L8593.8 1269.8L8587.9 1228.8L8570.7 1177.6L8541.6 1116.2L8027.5 225.3L7969.0 133.1L7913.4 61.4L7851.7 0.0L7788.3 -45.4L7745.2 -67.0L7706.7 -80.4L7628.9 -91.1L7564.7 -78.0L7537.2 -61.4L7515.6 -38.9L7484.1 30.7L7293.4 675.8L7279.6 705.1L7257.8 720.7L7247.0 719.6L7225.7 706.6L7183.3 655.4L6899.6 174.1L6843.0 92.2L6787.2 29.7L6740.6 -10.2L6696.4 -38.9L6654.8 -57.8L6618.2 -68.0L6575.1 -71.7L6537.4 -66.1L6506.8 -48.0L6490.7 -20.5L6486.9 20.5L6494.4 61.4L6512.7 112.6L6542.6 174.1L7027.7 1013.8L7096.2 1126.4L7174.0 1228.8L7214.4 1269.8L7250.9 1300.5L7290.7 1327.3L7334.1 1349.4L7372.8 1363.1Z"/>
+    <path d="M9024.2 1402.9L9088.2 1410.1L9181.9 1412.8L9939.7 1412.8L10039.8 1408.9L10104.7 1397.0L10152.0 1372.5L10174.8 1341.2L10178.0 1290.2L10153.3 1228.8L10106.8 1167.4L10045.4 1117.1L9986.4 1085.7L9922.7 1064.1L9854.0 1051.5L9592.7 1042.4L9541.9 1025.3L9506.5 999.6L9482.4 972.8L9461.7 942.1L9051.5 235.5L8980.5 122.9L8923.4 51.2L8869.6 0.0L8815.4 -37.9L8759.9 -63.1L8712.9 -73.6L8671.7 -74.0L8636.0 -64.8L8616.5 -51.2L8602.6 -30.7L8595.8 0.0L8599.0 41.0L8610.4 81.9L8636.8 143.4L8680.8 225.3L9096.3 942.1L9111.1 972.8L9118.4 1003.5L9112.1 1025.9L9080.8 1042.5L8869.5 1049.0L8787.2 1066.1L8756.3 1083.6L8736.3 1105.9L8726.1 1136.6L8727.5 1167.4L8741.3 1208.3L8764.9 1249.3L8798.2 1290.2L8832.0 1321.0L8877.5 1351.7L8918.5 1372.2L8975.4 1392.2Z"/>
+    <path d="M10647.8 1402.9L10792.5 1410.7L11620.6 1408.3L11687.2 1399.5L11729.8 1384.6L11760.1 1361.9L11778.0 1326.2L11777.9 1290.2L11764.6 1249.3L11741.5 1208.3L11708.7 1167.4L11675.5 1136.6L11631.3 1105.9L11586.4 1083.1L11536.0 1065.0L11464.8 1049.9L11368.6 1042.9L10640.5 1041.0L10593.4 1030.3L10561.9 1013.8L10527.4 983.0L10497.9 942.1L10477.9 901.1L10472.5 870.4L10479.6 851.0L10502.5 837.4L10540.8 832.9L11022.8 834.1L11122.9 830.2L11169.8 822.6L11208.3 809.0L11233.8 791.6L11251.5 768.0L11258.8 737.3L11255.6 706.6L11240.2 665.6L11215.4 624.6L11180.4 583.7L11144.9 553.0L11099.6 523.7L11057.2 503.5L10982.5 480.5L10883.1 467.9L10338.2 464.2L10284.0 459.0L10237.5 440.3L10199.8 409.6L10162.6 358.4L10137.2 307.2L10131.9 276.5L10137.8 259.0L10151.7 247.6L10178.3 240.5L10914.2 238.1L10992.4 231.6L11050.7 215.0L11082.8 193.1L11100.9 163.8L11104.9 133.1L11096.2 92.2L11069.9 41.0L11038.3 0.0L10993.7 -41.0L10946.6 -71.7L10895.8 -95.3L10845.7 -111.2L10788.1 -122.3L10723.4 -127.8L9852.6 -128.6L9764.9 -120.8L9703.9 -102.4L9662.0 -71.7L9641.5 -30.7L9638.6 10.2L9647.6 61.4L9665.4 112.6L9699.6 184.3L10174.3 1013.8L10256.8 1146.9L10295.2 1198.1L10340.8 1249.0L10385.7 1290.2L10426.7 1321.0L10479.1 1351.7L10525.5 1372.2L10586.7 1391.3Z"/>
+  </g>
+      </svg>
+    </span>
+    <span class="mark-sub">type effects lab</span>
+  </div>
+  <div class="grow"></div>
+</header>
+
+<div class="app">
+  <main class="main">
+
+    <section class="panel stage">
+      <div class="panel-bar">
+        <span class="tab">Preview</span>
+        <span class="grow"></span>
+        <span class="k">click to type</span>
+        <button class="svg-chip" id="svgChip" title="Remove the SVG and go back to text"><span id="svgChipName">svg</span>✕</button>
+      </div>
+      <div class="canvasbox" id="canvasbox">
+        <svg class="preview-svg" id="preview" preserveAspectRatio="xMinYMin meet"></svg>
+        <textarea id="text" class="editor" spellcheck="false">Type something here please</textarea>
+        <button class="clear-btn" id="clearBtn" title="Clear text">×</button>
+      </div>
+    </section>
+
+    <div class="ctrl">
+      <div class="ctrl-item">
+        <label>size</label>
+        <div class="numspin">
+          <input type="number" id="size" min="12" max="400" value="104">
+          <span class="unit">px</span>
+          <div class="spin"><button data-nudge="size" data-dir="4">▲</button><button data-nudge="size" data-dir="-4">▼</button></div>
+        </div>
+      </div>
+      <div class="ctrl-item">
+        <label>V/A</label>
+        <div class="numspin">
+          <input type="number" id="tracking" min="-200" max="500" value="0">
+          <div class="spin"><button data-nudge="tracking" data-dir="10">▲</button><button data-nudge="tracking" data-dir="-10">▼</button></div>
+        </div>
+      </div>
+      <div class="ctrl-item">
+        <label>align</label>
+        <div class="align-group" id="alignGroup">
+          <button data-align="left" class="on" title="Align left"><svg viewBox="0 0 12 12"><rect x="1" y="2" width="10" height="1"/><rect x="1" y="5" width="7" height="1"/><rect x="1" y="8" width="9" height="1"/></svg></button>
+          <button data-align="center" title="Align center"><svg viewBox="0 0 12 12"><rect x="1" y="2" width="10" height="1"/><rect x="3" y="5" width="7" height="1"/><rect x="1" y="8" width="10" height="1"/></svg></button>
+          <button data-align="right" title="Align right"><svg viewBox="0 0 12 12"><rect x="1" y="2" width="10" height="1"/><rect x="5" y="5" width="6" height="1"/><rect x="2" y="8" width="9" height="1"/></svg></button>
+        </div>
+      </div>
+      <div class="ctrl-item">
+        <label>ink</label>
+        <span class="swatch" id="swInk" data-swatch="ink" style="background:#000000"></span>
+        <label>paper</label>
+        <span class="swatch checker" id="swBg" data-swatch="bg"></span>
+      </div>
+      <div class="ctrl-item spacer"></div>
+      <button class="btn ctrl-btn" id="montageBtn">Montage <span class="ico plus"><svg viewBox="0 0 34.58 34.58"><path d="M32.55,13.12h-9.07c-1.12,0-2.03-.91-2.03-2.03V2.03c0-1.12-.91-2.03-2.03-2.03h-4.29c-1.12,0-2.03.91-2.03,2.03v9.07c0,1.12-.91,2.03-2.03,2.03H2.03c-1.12,0-2.03.91-2.03,2.03v4.29c0,1.12.91,2.03,2.03,2.03h9.07c1.12,0,2.03.91,2.03,2.03v9.07c0,1.12.91,2.03,2.03,2.03h4.29c1.12,0,2.03-.91,2.03-2.03v-9.07c0-1.12.91-2.03,2.03-2.03h9.07c1.12,0,2.03-.91,2.03-2.03v-4.29c0-1.12-.91-2.03-2.03-2.03Z"/></svg></span></button>
+    </div>
+
+    <div class="tl" id="timeline"></div>
+
+    <section class="panel" id="specimen">
+      <div class="panel-bar">
+        <span class="tab">Specimen</span>
+        <span class="grow"></span>
+        <span class="k">every glyph, live</span>
+      </div>
+      <div class="grid" id="grid"></div>
+    </section>
+
+  </main>
+
+  <aside class="side">
+   <section class="panel sidepanel">
+    <div class="load-row">
+      <button class="btn" id="loadBtn">Load .otf/ttf</button>
+      <button class="btn" id="loadSvgBtn">Load .svg</button>
+    </div>
+    <div class="fxhead">
+      <button class="effects-btn" id="effectsBtn">Effects <span class="ico"><svg viewBox="0 0 34.58 34.58"><path d="M32.55,13.12h-9.07c-1.12,0-2.03-.91-2.03-2.03V2.03c0-1.12-.91-2.03-2.03-2.03h-4.29c-1.12,0-2.03.91-2.03,2.03v9.07c0,1.12-.91,2.03-2.03,2.03H2.03c-1.12,0-2.03.91-2.03,2.03v4.29c0,1.12.91,2.03,2.03,2.03h9.07c1.12,0,2.03.91,2.03,2.03v9.07c0,1.12.91,2.03,2.03,2.03h4.29c1.12,0,2.03-.91,2.03-2.03v-9.07c0-1.12.91-2.03,2.03-2.03h9.07c1.12,0,2.03-.91,2.03-2.03v-4.29c0-1.12-.91-2.03-2.03-2.03Z"/></svg></span></button>
+      <div class="picker" id="picker"></div>
+    </div>
+    <div class="fxscroll">
+      <div class="fx">
+        <div class="stack" id="stack"></div>
+        <p class="fx-empty">No effects yet. Add one above — they apply in the order they appear here.</p>
+      </div>
+    </div>
+
+    <div class="export-row">
+      <button class="btn" id="svgBtn">.svg <span class="ico arrow"><svg viewBox="0 0 30 30"><path d="M29.5,6.76v14.1c0,1.12-.91,2.03-2.03,2.03h-4.23c-1.12,0-2.03-.91-2.03-2.03v-6.71s-14.76,14.76-14.76,14.76c-.79.79-2.07.79-2.87,0l-2.99-2.99c-.79-.79-.79-2.07,0-2.87l14.76-14.76h-6.72c-1.12,0-2.03-.91-2.03-2.03V2.03c0-1.12.91-2.03,2.03-2.03h14.1c.54,0,1.05.21,1.43.59l4.73,4.73c.38.38.59.9.59,1.43Z"/></svg></span></button>
+      <button class="btn" id="otfBtn">.otf <span class="ico arrow"><svg viewBox="0 0 30 30"><path d="M29.5,6.76v14.1c0,1.12-.91,2.03-2.03,2.03h-4.23c-1.12,0-2.03-.91-2.03-2.03v-6.71s-14.76,14.76-14.76,14.76c-.79.79-2.07.79-2.87,0l-2.99-2.99c-.79-.79-.79-2.07,0-2.87l14.76-14.76h-6.72c-1.12,0-2.03-.91-2.03-2.03V2.03c0-1.12.91-2.03,2.03-2.03h14.1c.54,0,1.05.21,1.43.59l4.73,4.73c.38.38.59.9.59,1.43Z"/></svg></span></button>
+    </div>
+   </section>
+  </aside>
+</div>
+
+<footer class="status">
+  <span class="st"><b>font</b><span id="fontLabel">—</span></span>
+  <span class="st"><span id="glyphCount">— glyphs</span></span>
+  <span class="st" id="railnote">Loading…</span>
+</footer>
+
+<input type="file" id="fontFile" accept=".otf,.ttf,.woff" hidden>
+<input type="file" id="svgFile" accept=".svg,image/svg+xml" hidden>
+
+<!-- The colour popover lives at body level on purpose.
+
+     Inside the control strip it was unusable: .ctrl carries
+     `animation:riseIn … both`, and an animation on transform/opacity makes an
+     element a stacking context for as long as it runs OR fills — which, with
+     fill-mode `both`, is forever. So .ctrl was a permanent stacking context and
+     the popover's z-index could only ever compete with .ctrl's own children.
+     The specimen panel sits later in the document and is a stacking context
+     too, so it painted straight over the popover: you could see the glyphs
+     through it, and every click meant for a slider landed on the grid instead.
+
+     As a child of <body> the popover is in the root stacking context, so
+     z-index actually means something and it takes its own pointer events.
+     It is position:fixed and placed from viewport coordinates by openCpick(). -->
+<div class="cpick" id="cpick"></div>
+<script>
+/* ══════════════════════════════════════════════════════════════
+   0. STATE
+   ══════════════════════════════════════════════════════════════ */
+
+let font=null, upm=1000, ready=false;
+/* An imported .svg becomes the source instead of the typed text: same
+   effect stack, same exports, just one drawing rather than a charset. */
+let artwork=null;   // {contours, width, name}
+let baseOverride=null;
+const CHARSET_BASE = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,;:!?&()-–'\"@#/*+=%".split('');
+/* Accented forms were simply absent from this list, so they never reached the
+   grid, the preview pipeline or the .otf. They sit apart because not every
+   source font carries them — a missing one would proof as an empty cell and
+   export as a blank glyph, which is worse than not offering it at all. */
+const CHARSET_ACCENTED = "ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÑÒÓÔÕÖØÙÚÛÜÝŸŒŠŽàáâãäåæçèéêëìíîïñòóôõöøùúûüýÿœšžß«»°".split('');
+let CHARSET = CHARSET_BASE.slice();
+
+/* Re-run on every font load: keep only what this particular font can draw. */
+function rebuildCharset(){
+  if(!font){ CHARSET = CHARSET_BASE.slice(); return; }
+  const has = ch => { try{ const g=font.charToGlyph(ch); return !!(g && g.index); }
+                      catch(e){ return false; } };
+  CHARSET = CHARSET_BASE.concat(CHARSET_ACCENTED.filter(has));
+}
+
+const REGISTRY = {}; const EFFECTS_ORDER = [];
+function defEffect(def){
+  REGISTRY[def.type]=def;
+  EFFECTS_ORDER.push(def.type);
+}
+function defaults(type){
+  const o={}; for(const c of REGISTRY[type].controls) if(c.key) o[c.key]=c.def;
+  if(REGISTRY[type].warp){
+    for(const k of ['TL','TR','BR','BL']){ o['warp'+k+'x']=0; o['warp'+k+'y']=0; }
+    o.warpSX=1; o.warpSY=1; o.warpTX=0; o.warpTY=0; o.warpROT=0;
+  }
+  return o;
+}
+
+const stack = [];        // [{type, on:bool, open:bool, p:{...}}, ...]
+let pickerOpen = false;
+/* Set by addEffect, consumed by the next renderStack: the id of the card that
+   should mark itself and scroll into view. Held here rather than on the effect
+   because it is a one-shot piece of presentation, not part of the recipe. */
+let freshId = null;
+
+/* The ink colour when none has been picked: whatever the theme is using. */
+const themeInk = () =>
+  document.documentElement.dataset.theme==='dark' ? '#ffffff' : '#000000';
+
+const cfg = {
+  colorInk: null,      // null → follow the theme
+  colorBg:  null,
+  align: 'left',
+  tracking: 0,
+};
+
+/* Each entry gets its own id, so the same effect can appear twice in the
+   stack and its card still has a unique handle. */
+let nextEffectId = 1;
+const byId = id => stack.find(e=>e.id===id);
+
+/* Baking freezes the current result into the base outlines. The only thing
+   it actually unlocks is re-using an effect that is already in the stack —
+   applying it twice needs the first pass turned into geometry first. It now
+   happens on its own, and every bake is reversible. */
+let bakeVersion = 0;
+const bakes = [];          // [{base, ids:[…], reason}] — newest last
+
+function bakeNow(reason){
+  if(!ready) return false;
+  const live = stack.filter(e=>!e.baked);
+  if(!live.length) return false;
+  const m=new Map();
+  for(const ch of CHARSET){
+    const g=font.charToGlyph(ch);
+    m.set(g.index, processGlyph(g).map(c=>c.slice()));
+  }
+  const sp=font.charToGlyph(' '); if(sp) m.set(sp.index, []);
+  bakes.push({base:baseOverride, ids:live.map(e=>e.id), reason});
+  baseOverride=m;
+  for(const e of live){ e.baked=true; e.open=false; e.bakeIndex=bakes.length; }
+  bakeVersion++;
+  cache.clear();
+  return true;
+}
+
+/* Undo the most recent bake: the outlines go back to what they were and the
+   frozen effects become live again, parameters and all. Anything added since
+   simply keeps applying on top, so nothing is lost either way. */
+function unbake(){
+  const b=bakes.pop();
+  if(!b) return;
+  baseOverride=b.base;
+  for(const id of b.ids){
+    const e=byId(id);
+    if(e){ e.baked=false; e.bakeIndex=null; e.bakeReason=null; }
+  }
+  bakeVersion++;
+  cache.clear();
+  invalidate(); renderSidebar();
+}
+
+function addEffect(type){
+  /* Adding an effect that is already in the stack: bake what is there so the
+     first pass becomes geometry, then start a fresh instance on top. */
+  const dup = stack.find(e=>e.type===type && !e.baked);
+  if(dup){
+    const label=REGISTRY[type].label;
+    if(bakeNow(label))
+      for(const e of stack) if(e.baked && e.bakeIndex===bakes.length && !e.bakeReason)
+        e.bakeReason=label;
+  }
+  const inst = {id:nextEffectId++, type, on:true, open:true, baked:false, p:defaults(type)};
+  stack.push(inst);
+  freshId = inst.id;
+  pickerOpen = false;
+  invalidate(); renderSidebar();
+}
+function removeEffect(id){
+  const i = stack.findIndex(e=>e.id===id);
+  if(i>=0) stack.splice(i,1);
+  invalidate(); renderSidebar();
+}
+function toggleEffect(id){
+  const e = byId(id); if(!e || e.baked) return;
+  e.on = !e.on;
+  invalidate(); renderSidebar();
+}
+function toggleEffectOpen(id){
+  const e = byId(id); if(!e) return;
+  e.open = !e.open; renderSidebar();
+}
+function anyEffectOn(){ return stack.some(e=>e.on); }
+
+/* Shared by the SPIKE and HATCHING control lists below. It has to be
+   declared up here, not next to flowAngle() in section 2: the defEffect
+   calls run as the script loads and read this array immediately, so a const
+   sitting further down is still in its temporal dead zone when they do. */
+const FLOW_OPTS=[['parallel','parallel'],['turbulence','turbulence'],
+                 ['dipole','dipole'],['radial','radial'],['swirl','swirl']];
+
+/* ══════════════════════════════════════════════════════════════
+   1. EFFECT DEFINITIONS
+   Order in the picker: SLICE · PIXEL · HALFTONE · LINES · FORM
+                        TOPO · GRAIN · EXTRUDE · ECHO
+                        SPIKE · HATCHING · WAVE
+   SPIKE and HATCHING share the flow fields in section 2: the same
+   modulations that aim a needle also turn a stroke.
+   WAVE is a post-process — it re-reads whatever is above it, so it belongs
+   late in the stack.
+   ══════════════════════════════════════════════════════════════ */
+
+/* ─── SLICE ───
+   Cuts the glyph into N slices along a rotated axis, then shifts each
+   slice perpendicularly. STAGGER walks the offset one way, slice after
+   slice, into a staircase; WAVE sends it through a full sine so the
+   letter leans out and comes back. */
+defEffect({ type:'slice', label:'SLICE',
+  controls:[
+    {key:'pattern',type:'seg',label:'shift pattern',def:'stagger',
+      opts:[['stagger','stagger'],['wave','wave']]},
+    {key:'cuts',label:'cuts',min:1,max:40,step:1,def:10},
+    {key:'angle',label:'cut angle',min:0,max:180,step:1,def:90,unit:'°'},
+    {key:'shift',label:'shift',min:-300,max:300,step:1,def:28},
+  ],
+  apply(cs,p){ return sliceGlyph(cs,p); } });
+
+/* ─── PIXEL ─── */
+defEffect({ type:'pixel', label:'PIXEL', warp:true,
+  controls:[
+    {key:'resolution',label:'resolution',min:4,max:80,step:1,def:22},
+    {key:'dotSize',label:'dot size',min:0.2,max:10,step:0.05,def:0.9},
+    {key:'shape',type:'seg',label:'shape',def:'square',
+      opts:[['square','square'],['circle','circle'],['triangle','triangle']]},
+    {type:'file',label:'load any shape (image/svg)'},
+    {type:'warp'},
+    {key:'threshold',label:'threshold',min:0.05,max:0.95,step:0.05,def:0.5},
+    {key:'scatter',label:'scatter',min:0,max:2,step:0.05,def:0},
+  ],
+  apply(cs,p){
+    const spacing=upm/p.resolution, cell=Math.max(upm/300, spacing/3);
+    const F=buildField(cs, cell, cell*3, 2); if(!F) return cs;
+    const warp = warpOf(p);
+    return dotScreen(F,{mode:'dots', shape:p.shape, gap:p.dotSize, threshold:p.threshold,
+      scatter:p.scatter, modulate:true, custom:p.custom, spacing, warp});
+  } });
+
+/* ─── HALFTONE ───
+   Amplitude-modulated screen: one dot per cell of a rotated lattice, its
+   area following the local coverage. Softness blurs the source first —
+   without it a solid letter has nothing to modulate and the screen closes
+   into a blob, which is exactly how a real halftone behaves. */
+defEffect({ type:'halftone', label:'HALFTONE',
+  controls:[
+    {key:'freq',label:'frequency',min:4,max:60,step:1,def:18},
+    {key:'angle',label:'screen angle',min:0,max:90,step:1,def:45,unit:'°'},
+    {key:'shape',type:'seg',label:'dot shape',def:'circle',
+      opts:[['circle','round'],['square','square'],['diamond','diamond']]},
+    {key:'soft',label:'softness',min:0,max:200,step:2,def:60},
+    {key:'dot',label:'dot size',min:0.4,max:1.7,step:0.05,def:1.1},
+    {key:'contrast',label:'contrast',min:-100,max:100,step:2,def:0},
+    {key:'ramp',label:'gradient',min:0,max:100,step:1,def:0},
+    {key:'rampAngle',label:'gradient angle',min:0,max:360,step:15,def:90,unit:'°'},
+  ],
+  apply(cs,p){ return halftoneScreen(cs,p); } });
+
+/* ─── LINES ───
+   Print rulings. Each line is a ribbon whose half-width is sampled along
+   its length, so 'tonal' gives the swelling line of an engraving while
+   'flat' gives a plain mechanical rule. */
+defEffect({ type:'lines', label:'LINES',
+  controls:[
+    {key:'tone',type:'seg',label:'line style',def:'flat',
+      opts:[['flat','flat'],['tonal','tonal']]},
+    {key:'cap',type:'seg',label:'line ends',def:'butt',
+      opts:[['butt','butt'],['round','round']]},
+    {key:'freq',label:'frequency',min:3,max:60,step:1,def:14},
+    {key:'angle',label:'angle',min:0,max:180,step:1,def:45,unit:'°'},
+    {key:'weight',label:'thickness',min:0.05,max:1,step:0.05,def:0.5},
+    {key:'soft',label:'softness',min:0,max:200,step:2,def:0},
+    {key:'contrast',label:'contrast',min:-100,max:100,step:2,def:0},
+  ],
+  apply(cs,p){ return lineScreen(cs, {...p, pattern:'lines'}); } });
+
+/* ─── FORM ─── */
+defEffect({ type:'form', label:'FORM',
+  controls:[
+    {key:'weight',label:'weight',min:-40,max:90,step:1,def:0},
+    {key:'slant',label:'slant',min:-30,max:30,step:1,def:0,unit:'°'},
+    {key:'round',label:'corner radius',min:0,max:160,step:2,def:0},
+    {key:'contour',type:'numinput',label:'contour',min:0,max:60,step:1,def:0,unit:' pt'},
+  ],
+  apply(cs,p){
+    let out = cs;
+    if(p.weight)  out = emboldenMorpho(out, p.weight*upm/1000);
+    if(p.slant)   out = out.map(c=>shear(c, Math.tan(p.slant*Math.PI/180)));
+    if(p.round)   out = out.map(c=>roundCorners(c, p.round*upm/1000));
+    if(p.contour>0){
+      const t = p.contour*upm/1000;
+      const strokes=[];
+      for(const c of out){
+        const s=Math.sign(area(c))||1;
+        const outer=offsetContour(c, t*0.5, s);
+        const inner=offsetContour(c, -t*0.5, s).reverse();
+        if(outer.length>2 && inner.length>2) strokes.push(outer, inner);
+      }
+      out = strokes;
+    }
+    return out;
+  } });
+
+/* ─── TOPO ─── */
+defEffect({ type:'topo', label:'TOPO',
+  controls:[
+    {key:'blur',label:'blur amount',min:0,max:180,step:2,def:0},
+    {key:'darkness',label:'darkness',min:-100,max:100,step:2,def:0},
+    {key:'levels',label:'levels',min:0,max:10,step:1,def:0},
+    {key:'rings',label:'isolines',min:0,max:14,step:1,def:0},
+    {key:'thickness',label:'isoline thickness',min:3,max:40,step:1,def:8},
+  ],
+  apply(cs,p){
+    if(!p.blur && !p.rings && !p.levels) return cs;
+    const cell=upm/200, blurPx=(p.blur*upm/1000)/cell;
+    const pad=Math.max(cell*2, blurPx*cell*2.2);
+    const F=buildField(cs, cell, pad, 1); if(!F) return cs;
+    boxBlur(F, blurPx);
+    /* Darkness simply decides how much room the black takes: push it up and
+       the ink spreads into the halo, pull it down and it retreats to the core. */
+    applyDarkness(F, p.darkness);
+    if(p.levels>0) return levelBands(F, p.levels, cell);
+    return isolines(F, {rings:p.rings, thickness:p.thickness}, cell);
+  } });
+
+/* ─── GRAIN ───
+   A stochastic screen: dots scattered through the coverage, each sized by
+   the tone under it. At softness 0 the field is hard, every dot reads the
+   same value inside the ink and comes out at max size — which is exactly
+   what a uniform stipple is. That is why STIPPLE was folded in here rather
+   than kept alongside: it was this effect with one slider at zero. */
+defEffect({ type:'grain', label:'GRAIN',
+  controls:[
+    {key:'soft',label:'softness',min:0,max:180,step:2,def:40},
+    {key:'density',label:'density',min:0.2,max:8,step:0.1,def:2},
+    {key:'sizeMax',label:'max dot size',min:2,max:30,step:0.5,def:10},
+    {key:'sizeMin',label:'min dot size',min:0.5,max:10,step:0.5,def:2},
+  ],
+  apply(cs,p){
+    const cell=upm/200, blurPx=(p.soft*upm/1000)/cell;
+    const pad=Math.max(cell*2, blurPx*cell*2.2);
+    const F=buildField(cs, cell, pad, 1); if(!F) return cs;
+    boxBlur(F, blurPx);
+    return blurStipple(F,{density:p.density, sizeMax:p.sizeMax, sizeMin:p.sizeMin});
+  } });
+
+/* ─── EXTRUDE ─── */
+defEffect({ type:'extrude', label:'EXTRUDE',
+  controls:[
+    {key:'depth',label:'depth',min:0,max:200,step:2,def:0},
+    {key:'direction',label:'direction',min:0,max:360,step:5,def:315,unit:'°'},
+  ],
+  apply(cs,p){
+    if(!p.depth) return cs;
+    return extrudeSolid(cs, p.depth*upm/1000, p.direction, 400);
+  } });
+
+/* ─── ECHO ─── */
+defEffect({ type:'echo', label:'ECHO',
+  controls:[
+    {key:'fill',type:'seg',label:'fill',def:'rings',
+      opts:[['rings','rings'],['bands','bands']]},
+    {key:'count',label:'ring count',min:1,max:12,step:1,def:4},
+    {key:'spacing',label:'spacing',min:0,max:80,step:2,def:24},
+    {key:'thickness',label:'line thickness',min:1,max:20,step:1,def:4},
+  ],
+  apply(cs,p){ return p.spacing ? contourEchoes(cs,{count:p.count, gap:p.spacing*upm/1000,
+    thickness:p.thickness*upm/1000, bands:p.fill==='bands', includeCore:true}) : cs; } });
+
+
+/* ─── SPIKE ───
+   Pushes a sawtooth off the outline. Short and regular it reads as a rough
+   cut; long and irregular it becomes fur or a liquid splat. Pure contour
+   work — it never touches the coverage field. */
+defEffect({ type:'spike', label:'SPIKE',
+  controls:[
+    {key:'aim',type:'seg',label:'aim',def:'normal',
+      opts:[['normal','normal']].concat(FLOW_OPTS.filter(o=>o[0]!=='parallel'))},
+    {key:'curve',type:'seg',label:'length curve',def:'even',
+      opts:[['even','even'],['burst','burst'],['alternate','alternate']]},
+    {key:'len',label:'spike length',min:0,max:400,step:2,def:110},
+    {key:'gap',label:'spacing',min:3,max:160,step:1,def:22},
+    {key:'width',label:'base width',min:0.05,max:1,step:0.05,def:0.35},
+    {key:'vary',label:'length variation',min:0,max:1,step:0.05,def:0.55},
+    {key:'fan',label:'fan',min:0,max:60,step:2,def:14,unit:'°'},
+  ],
+  apply(cs,p){
+    if(!p.len) return cs;
+    return spikeContours(cs, {len:p.len*upm/1000, gap:Math.max(2,p.gap)*upm/1000,
+      width:p.width, vary:p.vary, fan:p.fan*Math.PI/180,
+      aim:p.aim, curve:p.curve});
+  } });
+
+/* ─── HATCHING ─── */
+defEffect({ type:'hatching', label:'HATCHING',
+  controls:[
+    {key:'flow',type:'seg',label:'flow',def:'parallel',opts:FLOW_OPTS},
+    {key:'angle',label:'angle',min:0,max:180,step:1,def:45,unit:'°'},
+    {key:'spacing',label:'row spacing',min:4,max:200,step:2,def:26},
+    {key:'pitch',label:'stroke pitch',min:4,max:300,step:2,def:26},
+    {key:'len',label:'stroke length',min:4,max:300,step:2,def:52},
+    {key:'weight',label:'stroke weight',min:1,max:60,step:0.5,def:7},
+    {key:'scatter',label:'scatter',min:0,max:1,step:0.05,def:0},
+    {key:'spread',label:'angle spread',min:0,max:180,step:5,def:45,unit:'°'},
+  ],
+  apply(cs,p){
+    const F=buildField(cs, upm/240, upm/60, 1); if(!F) return cs;
+    const r=hatching(F,{flow:p.flow, angle:p.angle*Math.PI/180,
+      spacing:p.spacing*upm/1000, pitch:p.pitch*upm/1000, len:p.len*upm/1000,
+      weight:p.weight*upm/1000, scatter:p.scatter, spread:p.spread*Math.PI/180});
+    return r||cs;
+  } });
+
+/* ─── WAVE ───
+   Displaces every point along one axis by a sine taken along another. On
+   plain letters it ripples the outline; stacked under HALFTONE or LINES it
+   is the lattice that ripples, which is where the moiré comes from.
+   The contour is resampled first — without it a long straight edge has no
+   vertices for the wave to move and only its endpoints shift. */
+defEffect({ type:'wave', label:'WAVE',
+  controls:[
+    {key:'amp',label:'amplitude',min:0,max:300,step:2,def:40},
+    {key:'wavelength',label:'wavelength',min:10,max:900,step:10,def:220},
+    {key:'axis',label:'wave axis',min:0,max:180,step:1,def:90,unit:'°'},
+    {key:'dir',label:'push direction',min:0,max:360,step:5,def:0,unit:'°'},
+    {key:'phase',label:'phase',min:0,max:360,step:5,def:0,unit:'°'},
+  ],
+  apply(cs,p){
+    if(!p.amp) return cs;
+    const A=p.amp*upm/1000;
+    const wl=Math.max(4, p.wavelength)*upm/1000;
+    const k=2*Math.PI/wl;
+    const ax=p.axis*Math.PI/180, ct=Math.cos(ax), st=Math.sin(ax);
+    const dr=p.dir*Math.PI/180, dx=Math.cos(dr), dy=Math.sin(dr);
+    const ph=p.phase*Math.PI/180;
+    const step=Math.max(upm/400, wl/10);
+    return cs.map(c=>resampleClosed(c, step).map(q=>{
+      const d=A*Math.sin((q.x*ct+q.y*st)*k+ph);
+      return {x:q.x+dx*d, y:q.y+dy*d};
+    }));
+  } });
+
+/* ══════════════════════════════════════════════════════════════
+   2. GEOMETRY UTILITIES
+   ══════════════════════════════════════════════════════════════ */
+function flatten(cmds, tol){
+  const out=[]; let cur=null, px=0, py=0, sx=0, sy=0;
+  const push=(x,y)=>{ const l=cur[cur.length-1]; if(!l||Math.hypot(l.x-x,l.y-y)>1e-6) cur.push({x,y}); };
+  const steps=(len)=> Math.max(4, Math.min(48, Math.ceil(len/tol)));
+  for(const c of cmds){
+    if(c.type==='M'){ if(cur&&cur.length>2) out.push(cur); cur=[{x:c.x,y:c.y}]; px=sx=c.x; py=sy=c.y; }
+    else if(c.type==='L'){ push(c.x,c.y); px=c.x; py=c.y; }
+    else if(c.type==='Q'){
+      const n=steps(Math.hypot(c.x1-px,c.y1-py)+Math.hypot(c.x-c.x1,c.y-c.y1));
+      for(let i=1;i<=n;i++){ const t=i/n,u=1-t;
+        push(u*u*px+2*u*t*c.x1+t*t*c.x, u*u*py+2*u*t*c.y1+t*t*c.y); }
+      px=c.x; py=c.y;
+    }
+    else if(c.type==='C'){
+      const n=steps(Math.hypot(c.x1-px,c.y1-py)+Math.hypot(c.x2-c.x1,c.y2-c.y1)+Math.hypot(c.x-c.x2,c.y-c.y2));
+      for(let i=1;i<=n;i++){ const t=i/n,u=1-t;
+        push(u*u*u*px+3*u*u*t*c.x1+3*u*t*t*c.x2+t*t*t*c.x,
+             u*u*u*py+3*u*u*t*c.y1+3*u*t*t*c.y2+t*t*t*c.y); }
+      px=c.x; py=c.y;
+    }
+    else if(c.type==='Z'){ if(cur&&cur.length>2) out.push(cur); cur=null; px=sx; py=sy; }
+  }
+  if(cur&&cur.length>2) out.push(cur);
+  return out;
+}
+const area = c => { let a=0; for(let i=0,n=c.length;i<n;i++){ const p=c[i],q=c[(i+1)%n]; a+=p.x*q.y-q.x*p.y; } return a/2; };
+const bboxOf = cs => { let b={x0:1e9,y0:1e9,x1:-1e9,y1:-1e9};
+  for(const c of cs) for(const p of c){ b.x0=Math.min(b.x0,p.x); b.y0=Math.min(b.y0,p.y); b.x1=Math.max(b.x1,p.x); b.y1=Math.max(b.y1,p.y);} return b; };
+
+/* Offset a closed contour by distance d (s = winding sign).
+   Sharp convex corners are joined with an arc rather than a miter: a miter
+   shoots a long spike out of the corner, which is very visible once the
+   offset gets big (concentric rings, thick outlines). */
+function offsetContour(c,d,s){
+  const n=c.length, out=[];
+  const MITER=1.35;                 // beyond this, switch to a round join
+  const ad=Math.abs(d);
+  for(let i=0;i<n;i++){
+    const p=c[i], a=c[(i-1+n)%n], b=c[(i+1)%n];
+    const e1={x:p.x-a.x,y:p.y-a.y}, e2={x:b.x-p.x,y:b.y-p.y};
+    const l1=Math.hypot(e1.x,e1.y)||1, l2=Math.hypot(e2.x,e2.y)||1;
+    const n1x=s*e1.y/l1, n1y=-s*e1.x/l1, n2x=s*e2.y/l2, n2y=-s*e2.x/l2;
+    const dot=Math.max(-1,Math.min(1,n1x*n2x+n1y*n2y));
+    let mx=n1x+n2x, my=n1y+n2y;
+    const k=1+dot;
+    if(k>0.08){ mx/=k; my/=k; }
+    else { const l=Math.hypot(mx,my)||1; mx/=l; my/=l; }
+    const lim=Math.hypot(mx,my);
+    if(lim>MITER && ad>1e-6){
+      /* Round join: walk an arc from the first edge normal to the second,
+         centred on the original vertex. */
+      const a1=Math.atan2(n1y,n1x), a2=Math.atan2(n2y,n2x);
+      let sweep=a2-a1;
+      while(sweep> Math.PI) sweep-=2*Math.PI;
+      while(sweep<-Math.PI) sweep+=2*Math.PI;
+      const steps=Math.max(2, Math.min(16, Math.ceil(Math.abs(sweep)/0.35)));
+      for(let t=0;t<=steps;t++){
+        const ang=a1+sweep*(t/steps);
+        out.push({x:p.x+Math.cos(ang)*d, y:p.y+Math.sin(ang)*d});
+      }
+      continue;
+    }
+    out.push({x:p.x+mx*d, y:p.y+my*d});
+  }
+  return out;
+}
+function roundCorners(c,r){
+  if(r<=0) return c;
+  const n=c.length, out=[];
+  for(let i=0;i<n;i++){
+    const p=c[i], a=c[(i-1+n)%n], b=c[(i+1)%n];
+    const v1={x:a.x-p.x,y:a.y-p.y}, v2={x:b.x-p.x,y:b.y-p.y};
+    const l1=Math.hypot(v1.x,v1.y), l2=Math.hypot(v2.x,v2.y);
+    if(l1<1e-6||l2<1e-6){ out.push(p); continue; }
+    const cosA=(v1.x*v2.x+v1.y*v2.y)/(l1*l2);
+    const ang=Math.acos(Math.max(-1,Math.min(1,cosA)));
+    if(ang>2.62){ out.push(p); continue; }
+    const t=Math.min(r, l1*0.48, l2*0.48);
+    const A={x:p.x+v1.x/l1*t, y:p.y+v1.y/l1*t};
+    const B={x:p.x+v2.x/l2*t, y:p.y+v2.y/l2*t};
+    const seg=Math.max(3,Math.round(8*(Math.PI-ang)/Math.PI)+3);
+    for(let k=0;k<=seg;k++){ const u=k/seg, w=1-u;
+      out.push({x:w*w*A.x+2*w*u*p.x+u*u*B.x, y:w*w*A.y+2*w*u*p.y+u*u*B.y}); }
+  }
+  return out;
+}
+function shear(c,k){ return c.map(p=>({x:p.x+p.y*k, y:p.y})); }
+
+/* Reference box for the ramp gradient in halftone — the em square and
+   the font's own vertical metrics. With an SVG source, the drawing's box. */
+function refBox(){
+  if(artwork && artwork.contours.length){
+    const b=bboxOf(artwork.contours);
+    return {cx:(b.x0+b.x1)/2, cy:(b.y0+b.y1)/2,
+            hw:Math.max(1,(b.x1-b.x0)/2), hh:Math.max(1,(b.y1-b.y0)/2)};
+  }
+  const asc =(font&&font.ascender ) || upm*0.78;
+  const desc=(font&&font.descender) || -upm*0.22;
+  return {cx:upm*0.30, cy:(asc+desc)/2, hw:upm*0.42, hh:Math.max(1,(asc-desc)/2)};
+}
+
+/* ── Screens ──
+   Both work on a lattice rotated by the screen angle: bounds are taken in
+   that rotated frame, sampling happens in world space. */
+function rotBounds(cs, th, pad){
+  const c=Math.cos(-th), s=Math.sin(-th);
+  const b={x0:1e9,y0:1e9,x1:-1e9,y1:-1e9};
+  for(const cc of cs) for(const p of cc){
+    const x=p.x*c-p.y*s, y=p.x*s+p.y*c;
+    if(x<b.x0)b.x0=x; if(x>b.x1)b.x1=x;
+    if(y<b.y0)b.y0=y; if(y>b.y1)b.y1=y;
+  }
+  b.x0-=pad; b.y0-=pad; b.x1+=pad; b.y1+=pad;
+  return b;
+}
+const DIAMOND=[{x:0,y:.62},{x:.62,y:0},{x:0,y:-.62},{x:-.62,y:0}];
+
+/* A linear ramp across the reference box, used to fade a screen out. */
+function rampAt(x,y,angDeg,R){
+  const a=angDeg*Math.PI/180;
+  const u=((x-R.cx)/R.hw*Math.cos(a) + (y-R.cy)/R.hh*Math.sin(a));
+  return Math.max(0, Math.min(1, 0.5+u*0.5));
+}
+
+function screenField(cs, p, spacing){
+  const cell=Math.max(upm/420, spacing/8);
+  const blurPx=(p.soft*upm/1000)/cell;
+  const pad=Math.max(spacing, blurPx*cell*2.2, cell*3);
+  const F=buildField(cs, cell, pad, 2);
+  if(F && blurPx>=0.5) boxBlur(F, blurPx);
+  return F;
+}
+
+function halftoneScreen(cs, p){
+  const s=upm/Math.max(2,p.freq);
+  const F=screenField(cs,p,s); if(!F) return cs;
+  const th=p.angle*Math.PI/180, ct=Math.cos(th), st=Math.sin(th);
+  const b=rotBounds(cs, th, s*1.5);
+  const shape = p.shape==='diamond' ? DIAMOND : (SHAPES[p.shape]||SHAPES.circle);
+  const gamma=Math.pow(2, -p.contrast/50), R=refBox();
+  const out=[], iMax=Math.ceil(b.x1/s), jMax=Math.ceil(b.y1/s);
+  if((iMax-Math.floor(b.x0/s))*(jMax-Math.floor(b.y0/s))>90000) return cs;
+  for(let j=Math.floor(b.y0/s); j<=jMax; j++){
+    for(let i=Math.floor(b.x0/s); i<=iMax; i++){
+      const X=(i+0.5)*s, Y=(j+0.5)*s;
+      const x=X*ct-Y*st, y=X*st+Y*ct;
+      let v=sample(F,x,y);
+      if(v<=0.012) continue;
+      v=Math.pow(Math.min(1,v), gamma);
+      if(p.ramp) v*=1-(p.ramp/100)*(1-rampAt(x,y,p.rampAngle,R));
+      const dd=s*Math.sqrt(Math.max(0,v))*p.dot;
+      if(dd<s*0.05) continue;
+      out.push(shape.map(q=>{
+        const qx=q.x*dd, qy=q.y*dd;
+        return {x:x+qx*ct-qy*st, y:y+qx*st+qy*ct};
+      }));
+    }
+  }
+  return out.length?out:cs;
+}
+
+function lineScreen(cs, p){
+  const s=upm/Math.max(2,p.freq);
+  const F=screenField(cs,p,s); if(!F) return cs;
+  const out=[];
+  /* hatch: the second direction only bites where the ink is dense, the way
+     an engraver crosses a ruling to darken the shadows and leaves the
+     mid-tones on a single set of lines. */
+  const angles = p.pattern==='lines' ? [p.angle] : [p.angle, p.angle+90];
+  angles.forEach((a,idx)=>ribbons(cs, F, p, s, a*Math.PI/180,
+                                  idx ? 0.5 : 0,
+                                  p.pattern==='hatch' && idx ? 0.62 : 0, out));
+  return out.length?out:cs;
+}
+
+/* One ruling: walk along the line and build a ribbon whose half-width
+   follows the coverage under it. A break in the coverage closes the ribbon
+   and starts a new one, so lines stop at the edge of the ink. */
+function ribbons(cs, F, p, s, th, offset, minCov, out){
+  const ct=Math.cos(th), st=Math.sin(th);
+  const b=rotBounds(cs, th, s*1.2);
+  const step=Math.max(F.cell, s/5);
+  const gamma=Math.pow(2, -p.contrast/50);
+  const half=s*p.weight*0.5;
+  const round = p.cap==='round';
+  const world=(X,Y)=>({x:X*ct-Y*st, y:X*st+Y*ct});
+  /* Caps are swung in ruling space, where the ribbon is axis-aligned and its
+     end is a plain half-disc; rotating the whole polygon back at the end
+     keeps them true semicircles at any angle. dir +1 closes the right end
+     (top→bottom), -1 the left end (bottom→top). */
+  const cap=(X,hw,dir)=>{
+    const pts=[], N=9;
+    for(let i=1;i<N;i++){
+      const a = dir>0 ?  Math.PI/2 - Math.PI*i/N
+                      : -Math.PI/2 - Math.PI*i/N;
+      pts.push({X:X+Math.cos(a)*hw, Y:Math.sin(a)*hw});
+    }
+    return pts;
+  };
+  for(let j=Math.floor(b.y0/s); j<=Math.ceil(b.y1/s); j++){
+    const Y=(j+0.5+offset)*s;
+    let xs=null, hws=null;
+    const close=()=>{
+      if(xs && xs.length>1){
+        const n=xs.length, top=[], bot=[];
+        for(let i=0;i<n;i++){ top.push(world(xs[i], Y+hws[i])); bot.push(world(xs[i], Y-hws[i])); }
+        let poly=top;
+        if(round) poly=poly.concat(cap(xs[n-1], hws[n-1], 1).map(q=>world(q.X, Y+q.Y)));
+        poly=poly.concat(bot.reverse());
+        if(round) poly=poly.concat(cap(xs[0], hws[0], -1).map(q=>world(q.X, Y+q.Y)));
+        out.push(poly);
+      }
+      xs=hws=null;
+    };
+    for(let X=b.x0; X<=b.x1; X+=step){
+      const w0=world(X,Y);
+      let v=sample(F, w0.x, w0.y);
+      v=Math.pow(Math.min(1,Math.max(0,v)), gamma);
+      if(minCov && v<minCov){ close(); continue; }
+      const hw = p.tone==='tonal' ? half*v : (v>0.5 ? half : 0);
+      if(hw<=s*0.004){ close(); continue; }
+      if(!xs){ xs=[]; hws=[]; }
+      xs.push(X); hws.push(hw);
+    }
+    close();
+  }
+}
+
+function windingSign(cs){
+  let best=0, s=1;
+  for(const c of cs){ const a=area(c); if(Math.abs(a)>best){ best=Math.abs(a); s=Math.sign(a)||1; } }
+  return s;
+}
+
+/* ── Extrude ── */
+function extrude(cs,dx,dy){
+  const s=windingSign(cs), groups=[cs.map(c=>c.slice())];
+  groups.push(cs.map(c=>c.map(p=>({x:p.x+dx, y:p.y+dy}))));
+  for(const c of cs){
+    const n=c.length;
+    for(let i=0;i<n;i++){
+      const p=c[i], q=c[(i+1)%n];
+      const nrx=s*(q.y-p.y), nry=-s*(q.x-p.x);
+      if(nrx*dx+nry*dy<=0) continue;
+      groups.push([[p,q,{x:q.x+dx,y:q.y+dy},{x:p.x+dx,y:p.y+dy}]]);
+    }
+  }
+  return groups;
+}
+function extrudeSolid(cs,dist,angle,res){
+  const th=angle*Math.PI/180, dx=Math.cos(th)*dist, dy=Math.sin(th)*dist;
+  return unionSolid(extrude(cs,dx,dy), res);
+}
+/* Merge overlapping groups into one silhouette: rasterise each group with
+   its own nonzero fill, then re-trace the 0.5 level. Overlaps disappear,
+   counters survive. */
+function unionSolid(groups, res){
+  const all=[].concat(...groups);
+  if(!all.length) return all;
+  const cell=upm/(res||400);
+  const F=buildField(all, cell, cell*3, 1, 0, groups);
+  if(!F) return all;
+  const out=normalizeWinding(
+    marching(F,0.5).map(c=>simplify(c,cell*0.28)).filter(c=>c.length>3));
+  return out.length?out:all;
+}
+
+/* A signed distance field over the glyph: negative inside the ink, positive
+   outside, measured in grid cells. Both the bolder and the echo rings work
+   from this — offsetting raw contours self-intersects in concave areas,
+   while a level set of the distance field simply cannot. */
+function signedDistField(cs, pad, budget, cellMax){
+  const b=bboxOf(cs);
+  const span=Math.max(b.x1-b.x0, b.y1-b.y0) + pad*2;
+  /* upm/260 is the measured sweet spot (~3x faster than a finer grid for
+     under 0.5% outline difference). Coarsen only when a large pad — many
+     wide rings — would otherwise blow up the cell count, and never past the
+     point where the thinnest feature stops being resolvable. */
+  let cell=upm/260;
+  const cap=budget||420000;
+  if((span/cell)*(span/cell) > cap) cell=span/Math.sqrt(cap);
+  if(cellMax) cell=Math.min(cell, Math.max(upm/260, cellMax));
+  const F=buildField(cs, cell, pad, 1);
+  if(!F) return null;
+  const {f,w,h}=F;
+  const dist=new Float32Array(w*h);
+  for(let i=0;i<w*h;i++) dist[i]= f[i]>0.5 ? -1e9 : 1e9;
+  for(let j=0;j<h;j++) for(let i=0;i<w;i++){
+    const inside=f[j*w+i]>0.5;
+    let boundary=false;
+    if(i>0   && (f[j*w+i-1]>0.5)!==inside) boundary=true;
+    if(i<w-1 && (f[j*w+i+1]>0.5)!==inside) boundary=true;
+    if(j>0   && (f[(j-1)*w+i]>0.5)!==inside) boundary=true;
+    if(j<h-1 && (f[(j+1)*w+i]>0.5)!==inside) boundary=true;
+    if(boundary) dist[j*w+i]=0;
+  }
+  const D1=1, D2=Math.SQRT2;
+  for(let j=0;j<h;j++) for(let i=0;i<w;i++){
+    let v=Math.abs(dist[j*w+i]);
+    if(i>0)        v=Math.min(v, Math.abs(dist[j*w+i-1])+D1);
+    if(j>0)        v=Math.min(v, Math.abs(dist[(j-1)*w+i])+D1);
+    if(i>0&&j>0)   v=Math.min(v, Math.abs(dist[(j-1)*w+i-1])+D2);
+    if(i<w-1&&j>0) v=Math.min(v, Math.abs(dist[(j-1)*w+i+1])+D2);
+    dist[j*w+i]=(dist[j*w+i]<0?-1:1)*v;
+  }
+  for(let j=h-1;j>=0;j--) for(let i=w-1;i>=0;i--){
+    let v=Math.abs(dist[j*w+i]);
+    if(i<w-1)        v=Math.min(v, Math.abs(dist[j*w+i+1])+D1);
+    if(j<h-1)        v=Math.min(v, Math.abs(dist[(j+1)*w+i])+D1);
+    if(i<w-1&&j<h-1) v=Math.min(v, Math.abs(dist[(j+1)*w+i+1])+D2);
+    if(i>0&&j<h-1)   v=Math.min(v, Math.abs(dist[(j+1)*w+i-1])+D2);
+    dist[j*w+i]=(dist[j*w+i]<0?-1:1)*v;
+  }
+  return {dist, w, h, cell:F.cell, x0:F.x0, y0:F.y0, ytop:F.ytop};
+}
+
+/* Outline of the ink grown by d font units (negative shrinks it).
+   Marches the distance field directly at level d rather than materialising a
+   0..1 copy per ring — with a dozen rings that copy was most of the cost. */
+function dilateOutline(DT, d){
+  const level={f:DT.dist, w:DT.w, h:DT.h, cell:DT.cell,
+               x0:DT.x0, y0:DT.y0, ytop:DT.ytop};
+  return normalizeWinding(
+    marching(level, d/DT.cell).map(c=>simplify(c, DT.cell*0.28)).filter(c=>c.length>3));
+}
+
+/* Bolder that preserves counters (o, e, a, b, d, g, p, q holes). */
+function emboldenMorpho(cs, d){
+  if(!d) return cs;
+  const DT=signedDistField(cs, Math.abs(d)+upm/60);
+  if(!DT) return cs;
+  const out=dilateOutline(DT, d);
+  return out.length ? out : cs;
+}
+
+function contourEchoes(cs, cfg){
+  const out = cfg.includeCore ? cs.map(c=>c.slice()) : [];
+  const half=cfg.thickness*0.5;
+  const maxD = cfg.bands ? cfg.gap*(cfg.count+1) : cfg.gap*cfg.count + half;
+  /* Rings are level sets of the distance field, so they radiate away from
+     the INK in every direction at once: outward around the letter, and
+     inward toward the middle of each counter. Offsetting the raw contours
+     instead sent the counter rings the wrong way and tangled them inside
+     tight eyes like 'e' and 'g'. */
+  const DT=signedDistField(cs, maxD+upm/40, 420000/Math.sqrt(cfg.count),
+                           (cfg.bands ? cfg.gap : cfg.thickness)/2.2);
+  if(!DT) return out;
+  /* Bands mode fills every other slab rather than outlining each step. Slab 0
+     is skipped on purpose, so a gap always separates the first band from the
+     core instead of welding onto it. */
+  if(cfg.bands){
+    for(let k=1;k<=cfg.count;k+=2){
+      const outer=dilateOutline(DT, cfg.gap*(k+1));
+      if(!outer.length) continue;
+      out.push(...outer);
+      for(const c of dilateOutline(DT, cfg.gap*k)) out.push(c.slice().reverse());
+    }
+    return out;
+  }
+  for(let k=1;k<=cfg.count;k++){
+    const d=cfg.gap*k;
+    const outer=dilateOutline(DT, d+half);
+    if(!outer.length) continue;
+    out.push(...outer);
+    for(const c of dilateOutline(DT, d-half)) out.push(c.slice().reverse());
+  }
+  return out;
+}
+/* ── Slice ──────────────────────────────────────────────────────
+   Cuts contours along N evenly-spaced lines at a given angle, then
+   shifts each slab perpendicularly to the cut direction.
+
+   Strategy:
+   1. Rotate all contours so the cuts become horizontal.
+   2. Find the Y extent, divide it into (cuts+1) bands.
+   3. For each band, clip the rotated contours to that band using
+      the Sutherland-Hodgman algorithm (two half-plane clips).
+   4. Translate the clipped fragment by its per-slab shift.
+   5. Rotate everything back.
+
+   Sutherland-Hodgman half-plane clip: keeps the "inside" of a
+   line defined by (0,boundary) horizontal, direction given by `side`
+   (+1 = keep above, -1 = keep below).
+*/
+function sliceGlyph(cs, p){
+  if(!cs.length) return cs;
+  const cuts = Math.max(1, Math.round(p.cuts));
+  const shift = p.shift * upm / 1000;
+  /* Nullish, not falsy: an angle of 0 is a legitimate setting and `||` was
+     quietly turning it into 90. */
+  const th = (p.angle ?? 90) * Math.PI / 180;
+  const cosA = Math.cos(th), sinA = Math.sin(th);
+
+  /* Rotate about origin */
+  const rot = (c, ca, sa) => c.map(({x,y})=>({x: x*ca + y*sa, y: -x*sa + y*ca}));
+
+  /* Sutherland-Hodgman clip of a single closed contour to a horizontal
+     half-plane. side=+1 keeps points with y >= boundary; side=-1 keeps y <= boundary */
+  function clipHalf(contour, boundary, side){
+    if(!contour.length) return [];
+    const inside = p => side*(p.y - boundary) >= -1e-9;
+    const intersect = (a, b) => {
+      const t = (boundary - a.y) / ((b.y - a.y) || 1e-9);
+      return {x: a.x + t*(b.x - a.x), y: boundary};
+    };
+    const out = [];
+    const n = contour.length;
+    for(let i = 0; i < n; i++){
+      const cur = contour[i], prv = contour[(i-1+n)%n];
+      const curIn = inside(cur), prvIn = inside(prv);
+      if(prvIn && curIn){ out.push(cur); }
+      else if(prvIn && !curIn){ out.push(intersect(prv,cur)); }
+      else if(!prvIn && curIn){ out.push(intersect(prv,cur)); out.push(cur); }
+      // both outside: nothing
+    }
+    return out;
+  }
+
+  /* Clip a multi-contour glyph to a horizontal band [yLo, yHi] */
+  function clipBand(contours, yLo, yHi){
+    const out = [];
+    for(const c of contours){
+      const step1 = clipHalf(c, yLo, +1);  // above yLo
+      const step2 = clipHalf(step1, yHi, -1); // below yHi
+      if(step2.length > 2) out.push(step2);
+    }
+    return out;
+  }
+
+  /* Rotate all contours to make cuts horizontal */
+  const rotated = cs.map(c => rot(c, cosA, sinA));
+
+  /* Find Y range */
+  let yMin = Infinity, yMax = -Infinity;
+  for(const c of rotated) for(const p of c){ yMin = Math.min(yMin, p.y); yMax = Math.max(yMax, p.y); }
+  const ySpan = yMax - yMin;
+  if(ySpan < 1e-6) return cs;
+
+  /* Per-slab shift amount.
+     stagger — the offset walks one way, slab after slab: a staircase.
+     wave    — one full sine across the stack, so it leans out and returns. */
+  const slabCount = cuts + 1;
+  const shiftAmounts = [];
+  for(let i = 0; i < slabCount; i++){
+    const t = slabCount < 2 ? 0.5 : i / (slabCount - 1);   // 0..1, bottom → top
+    const mag = p.pattern === 'wave' ? Math.sin(t * Math.PI * 2) : t;
+    shiftAmounts.push(shift * mag);
+  }
+
+  /* Evenly spaced cut boundaries */
+  const boundaries = [yMin];
+  for(let i = 1; i <= cuts; i++) boundaries.push(yMin + (i / (cuts + 1)) * ySpan);
+  boundaries.push(yMax);
+
+  /* Clip each slab and shift it */
+  const result = [];
+  const cosBack = Math.cos(-th), sinBack = Math.sin(-th);
+  for(let i = 0; i < slabCount; i++){
+    const yLo = boundaries[i], yHi = boundaries[i+1];
+    const slabs = clipBand(rotated, yLo - 1e-4, yHi + 1e-4);
+    const dx = shiftAmounts[i];
+    for(const slab of slabs){
+      /* Translate in rotated space (perpendicular to cuts = along X after rotation) */
+      const shifted = slab.map(({x,y}) => ({x: x + dx, y}));
+      /* Rotate back */
+      result.push(rot(shifted, cosBack, sinBack));
+    }
+  }
+  return result.length ? result : cs;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   3. COVERAGE FIELD
+   ══════════════════════════════════════════════════════════════ */
+const rc = document.createElement('canvas'), rx = rc.getContext('2d',{colorSpace:'srgb', willReadFrequently:true});
+
+function buildField(contours, cell, pad, ss, stroke, groups){
+  const b=bboxOf(contours);
+  const x0=Math.floor((b.x0-pad)/cell)*cell, y0=Math.floor((b.y0-pad)/cell)*cell;
+  const w=Math.ceil((b.x1+pad-x0)/cell)+1, h=Math.ceil((b.y1+pad-y0)/cell)+1;
+  if(w<1||h<1||w*h>900000) return null;
+  rc.width=w*ss; rc.height=h*ss;
+  rx.clearRect(0,0,rc.width,rc.height);
+  rx.fillStyle='#000'; rx.strokeStyle='#000';
+  const S=ss/cell;
+  const trace=cs=>{ rx.beginPath();
+    for(const c of cs){
+      rx.moveTo((c[0].x-x0)*S, (h*cell-(c[0].y-y0))*S);
+      for(let i=1;i<c.length;i++) rx.lineTo((c[i].x-x0)*S, (h*cell-(c[i].y-y0))*S);
+      rx.closePath();
+    } };
+  if(groups){
+    for(const g of groups){ trace(g); rx.fill('nonzero'); }
+  } else {
+    trace(contours);
+    rx.fill('nonzero');
+    if(stroke){
+      rx.lineJoin='miter'; rx.miterLimit=8; rx.lineWidth=Math.abs(stroke)*2*S;
+      if(stroke<0) rx.globalCompositeOperation='destination-out';
+      rx.stroke();
+      rx.globalCompositeOperation='source-over';
+    }
+  }
+  const img=rx.getImageData(0,0,rc.width,rc.height).data;
+  const f=new Float32Array(w*h);
+  for(let j=0;j<h;j++) for(let i=0;i<w;i++){
+    let s=0;
+    for(let v=0;v<ss;v++) for(let u=0;u<ss;u++) s+=img[(((j*ss+v)*rc.width)+(i*ss+u))*4+3];
+    f[j*w+i]=s/(255*ss*ss);
+  }
+  return {f,w,h,cell,x0,y0,ytop:y0+h*cell};
+}
+
+function boxBlur(F,r){
+  if(r<0.5) return;
+  const {f,w,h}=F, R=Math.round(r), tmp=new Float32Array(f.length);
+  for(let pass=0;pass<3;pass++){
+    for(let j=0;j<h;j++){ let s=0;
+      for(let i=-R;i<=R;i++) s+=f[j*w+Math.max(0,Math.min(w-1,i))];
+      for(let i=0;i<w;i++){ tmp[j*w+i]=s/(2*R+1);
+        s+=f[j*w+Math.min(w-1,i+R+1)]-f[j*w+Math.max(0,i-R)]; } }
+    for(let i=0;i<w;i++){ let s=0;
+      for(let j=-R;j<=R;j++) s+=tmp[Math.max(0,Math.min(h-1,j))*w+i];
+      for(let j=0;j<h;j++){ f[j*w+i]=s/(2*R+1);
+        s+=tmp[Math.min(h-1,j+R+1)*w+i]-tmp[Math.max(0,j-R)*w+i]; } }
+  }
+}
+
+const hash=(x,y)=>{ const s=Math.sin(x*127.1+y*311.7)*43758.5453; return s-Math.floor(s); };
+
+function sample(F,x,y){
+  const i=(x-F.x0)/F.cell-0.5, j=(F.ytop-y)/F.cell-0.5;
+  const i0=Math.floor(i), j0=Math.floor(j), fx=i-i0, fy=j-j0;
+  const g=(a,b)=> (a<0||b<0||a>=F.w||b>=F.h) ? 0 : F.f[b*F.w+a];
+  return (g(i0,j0)*(1-fx)+g(i0+1,j0)*fx)*(1-fy)+(g(i0,j0+1)*(1-fx)+g(i0+1,j0+1)*fx)*fy;
+}
+
+function marching(F,L){
+  const {f,w,h}=F, segs=[];
+  const ip=(v1,v2)=>(L-v1)/((v2-v1)||1e-9);
+  for(let j=0;j<h-1;j++) for(let i=0;i<w-1;i++){
+    const a=f[j*w+i], b=f[j*w+i+1], c=f[(j+1)*w+i+1], d=f[(j+1)*w+i];
+    const idx=(a>L?8:0)|(b>L?4:0)|(c>L?2:0)|(d>L?1:0);
+    if(idx===0||idx===15) continue;
+    const T={x:i+ip(a,b), y:j}, R={x:i+1, y:j+ip(b,c)},
+          B={x:i+ip(d,c), y:j+1}, Lp={x:i, y:j+ip(a,d)};
+    const add=(p,q)=>segs.push([p,q]);
+    switch(idx){
+      case 1: add(Lp,B); break;  case 2: add(B,R); break;  case 3: add(Lp,R); break;
+      case 4: add(R,T); break;   case 5: add(Lp,T); add(B,R); break;
+      case 6: add(B,T); break;   case 7: add(Lp,T); break;  case 8: add(T,Lp); break;
+      case 9: add(T,B); break;   case 10: add(T,R); add(B,Lp); break;
+      case 11: add(T,R); break;  case 12: add(R,Lp); break; case 13: add(R,B); break;
+      case 14: add(B,Lp); break;
+    }
+  }
+  const key=p=>Math.round(p.x*4096)+','+Math.round(p.y*4096);
+  const start=new Map();
+  segs.forEach((s,i)=>{ const k=key(s[0]); (start.get(k)||start.set(k,[]).get(k)).push(i); });
+  const used=new Array(segs.length).fill(false), out=[];
+  for(let i=0;i<segs.length;i++){
+    if(used[i]) continue;
+    const c=[segs[i][0]]; let cur=i;
+    while(cur!==undefined && !used[cur]){
+      used[cur]=true; c.push(segs[cur][1]);
+      const nx=(start.get(key(segs[cur][1]))||[]).find(k=>!used[k]);
+      cur=nx;
+    }
+    if(c.length>3) out.push(c);
+  }
+  return out.map(c=>c.map(p=>({x:F.x0+p.x*F.cell, y:F.ytop-p.y*F.cell})));
+}
+
+/* Marching squares returns contours whose winding is the opposite of the
+   font convention. SVG's nonzero rule doesn't care, but OTF export does —
+   a flipped outer contour makes counters fill in. So: force the biggest
+   contour positive and flip everything with it. */
+function normalizeWinding(cs){
+  if(!cs.length) return cs;
+  let biggest=0, sign=1;
+  for(const c of cs){
+    const a=area(c);
+    if(Math.abs(a)>biggest){ biggest=Math.abs(a); sign=Math.sign(a)||1; }
+  }
+  return sign>0 ? cs : cs.map(c=>c.slice().reverse());
+}
+
+function simplify(c,tol){
+  if(c.length<8) return c;
+  const closed=Math.hypot(c[0].x-c[c.length-1].x, c[0].y-c[c.length-1].y)<1e-6;
+  if(closed){
+    let mi=1, md=-1;
+    for(let i=1;i<c.length-1;i++){ const d=Math.hypot(c[i].x-c[0].x, c[i].y-c[0].y); if(d>md){md=d;mi=i;} }
+    return dp(c.slice(0,mi+1),tol).slice(0,-1).concat(dp(c.slice(mi),tol).slice(0,-1));
+  }
+  return dp(c,tol);
+}
+function dp(c,tol){
+  if(c.length<3) return c;
+  const keep=new Array(c.length).fill(false); keep[0]=keep[c.length-1]=true;
+  const st=[[0,c.length-1]];
+  while(st.length){
+    const [a,b]=st.pop(); if(b-a<2) continue;
+    const p=c[a], q=c[b]; const dx=q.x-p.x, dy=q.y-p.y, L=Math.hypot(dx,dy)||1;
+    let mi=-1, md=tol;
+    for(let i=a+1;i<b;i++){
+      const d=Math.abs((c[i].x-p.x)*dy-(c[i].y-p.y)*dx)/L;
+      if(d>md){ md=d; mi=i; }
+    }
+    if(mi>0){ keep[mi]=true; st.push([a,mi],[mi,b]); }
+  }
+  return c.filter((_,i)=>keep[i]);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   4. PIXEL SHAPES + SCREENING
+   ══════════════════════════════════════════════════════════════ */
+const SHAPES={
+  square:[{x:-.5,y:-.5},{x:.5,y:-.5},{x:.5,y:.5},{x:-.5,y:.5}],
+  circle:Array.from({length:28},(_,i)=>{const a=i/28*Math.PI*2;return{x:Math.cos(a)*.5,y:Math.sin(a)*.5};}),
+  triangle:[{x:0,y:.58},{x:.5,y:-.29},{x:-.5,y:-.29}]
+};
+
+/* Warp a unit shape (coords in [-0.5,0.5]) through an 8-handle distortion:
+   4 corners plus 4 edge midpoints. The corners pin the quad; the edge
+   handles bow each side in or out, which is what lets you squeeze or
+   expand the shape rather than only skew it.
+
+   Each edge is a quadratic Bézier passing exactly through its handle, and
+   the interior is filled with a Coons patch so the deformation stays
+   smooth and reduces to the plain quad when the edge handles sit at rest. */
+/* An Illustrator-style transform box for the pixel shape.
+
+   Corners are free: each one moves on its own, which is what distorts the
+   shape into an arbitrary quad.
+
+   Sides are NOT free points. Dragging a side handle scales the whole shape
+   along that axis, anchored to the opposite side — the same as dragging a
+   bounding-box handle in Illustrator. Alt scales about the centre instead.
+   The anchoring is already baked into sx/tx by the drag handler, so here we
+   only apply the resulting scale and offset.
+
+   Rotation spins the whole thing about the box centre.
+
+   Chain: corner distort -> axis scale (+ anchor offset) -> rotate. */
+function warpShape(shape, w){
+  const TL={x:-0.5+w.tl[0], y: 0.5+w.tl[1]};
+  const TR={x: 0.5+w.tr[0], y: 0.5+w.tr[1]};
+  const BR={x: 0.5+w.br[0], y:-0.5+w.br[1]};
+  const BL={x:-0.5+w.bl[0], y:-0.5+w.bl[1]};
+  const sx=w.sx, sy=w.sy, tx=w.tx, ty=w.ty;
+  const th=w.rot*Math.PI/180, cs=Math.cos(th), sn=Math.sin(th);
+  return shape.map(p=>{
+    const u=p.x+0.5, v=p.y+0.5;          // v=0 bottom, v=1 top
+    // 1. free-corner distort (bilinear over the quad)
+    const dx=(1-u)*(1-v)*BL.x + u*(1-v)*BR.x + (1-u)*v*TL.x + u*v*TR.x;
+    const dy=(1-u)*(1-v)*BL.y + u*(1-v)*BR.y + (1-u)*v*TL.y + u*v*TR.y;
+    // 2. scale along each axis, plus the offset that keeps the anchor put
+    const ax=dx*sx+tx, ay=dy*sy+ty;
+    // 3. rotate about the box centre
+    const rx=ax-tx, ry=ay-ty;
+    return {x:tx+rx*cs-ry*sn, y:ty+rx*sn+ry*cs};
+  });
+}
+
+const WARP_CORNERS=['tl','tr','br','bl'];
+const WARP_SIDES=['tm','bm','lm','rm'];
+const WARP_KEYS=WARP_CORNERS.concat(WARP_SIDES);
+
+/* Gather the transform out of the effect's flat parameter bag. */
+function warpOf(p){
+  const w={sx:p.warpSX===undefined?1:p.warpSX, sy:p.warpSY===undefined?1:p.warpSY,
+           tx:p.warpTX||0, ty:p.warpTY||0, rot:p.warpROT||0};
+  for(const k of WARP_CORNERS){
+    const K=k.toUpperCase();
+    w[k]=[p['warp'+K+'x']||0, p['warp'+K+'y']||0];
+  }
+  return w;
+}
+const hasWarp = w => !!w && (
+  WARP_CORNERS.some(k=> w[k] && (w[k][0] || w[k][1]) ) ||
+  w.sx!==1 || w.sy!==1 || w.tx!==0 || w.ty!==0 || w.rot!==0 );
+
+/* Where each handle sits, in shape space, for the current transform. */
+function warpHandlePoints(w){
+  const src={tl:{x:-0.5,y:0.5}, tr:{x:0.5,y:0.5}, br:{x:0.5,y:-0.5}, bl:{x:-0.5,y:-0.5},
+             tm:{x:0,y:0.5},    bm:{x:0,y:-0.5},  lm:{x:-0.5,y:0},   rm:{x:0.5,y:0}};
+  const pts={}, keys=WARP_KEYS;
+  const mapped=warpShape(keys.map(k=>src[k]), w);
+  keys.forEach((k,i)=>pts[k]=mapped[i]);
+  return pts;
+}
+
+/* Undo rotate+scale to get back to distort space — used while dragging. */
+function warpUnproject(P, w){
+  const th=-w.rot*Math.PI/180, cs=Math.cos(th), sn=Math.sin(th);
+  const rx=P.x-w.tx, ry=P.y-w.ty;
+  const ux=w.tx+rx*cs-ry*sn, uy=w.ty+rx*sn+ry*cs;   // un-rotated
+  return {x:(ux-w.tx)/(w.sx||1e-6), y:(uy-w.ty)/(w.sy||1e-6), ux, uy};
+}
+
+/* Dot screen used by PIXEL */
+function dotScreen(F,cfg){
+  const out=[], s=cfg.spacing, thr=cfg.threshold, sc=cfg.scatter;
+  const bx0=F.x0, bx1=F.x0+F.w*F.cell, by0=F.ytop-F.h*F.cell, by1=F.ytop;
+  let base = cfg.shape==='custom' && cfg.custom ? cfg.custom : [SHAPES[cfg.shape]||SHAPES.square];
+  if(hasWarp(cfg.warp)) base = base.map(sh=>warpShape(sh, cfg.warp));
+  const mod = v => Math.min(1, v/Math.max(.05,thr));
+  for(let bj=0; by0+(bj+0.5)*s<=by1; bj++){
+    for(let bi=0; bx0+(bi+0.5)*s<=bx1; bi++){
+      let x=bx0+(bi+0.5)*s, y=by0+(bj+0.5)*s;
+      const v=sample(F,x,y); if(v<thr) continue;
+      if(sc>0 && hash(bi*3.1+7,bj*5.7+3)>Math.min(1,v*1.7)) continue;
+      if(sc>0){ x+=(hash(bi*1.7,bj*2.3)-0.5)*s*sc*2;
+                y+=(hash(bj*1.9,bi*2.7)-0.5)*s*sc*2; }
+      const d=s*cfg.gap*(cfg.modulate?mod(v)*0.55+0.45:1);
+      for(const sh of base) out.push(sh.map(p=>({x:x+p.x*d, y:y+p.y*d})));
+    }
+  }
+  return out;
+}
+
+/* Isolines / blurred outline used by BLUR */
+/* Posterised blur: slice the soft falloff into n filled concentric steps.
+   Each band is the region between two thresholds — the lower one gives the
+   outer edge, the higher one is reversed to carve the inside out, so nonzero
+   fill leaves a clean ring rather than a solid blob. `spread` is the duty
+   cycle: how much of each step is ink versus gap. */
+function levelBands(F, n, cell){
+  /* Absolute thresholds on purpose: tying them to the field's peak packed the
+     steps into a narrow slice of the gradient and turned the bands into
+     hairlines. Darkness already moves the gradient under them. */
+  const out=[], lo=0.08, hi=0.94, duty=0.5;
+  const cut=f=>Math.min(0.985, Math.max(0.02, f));
+  const at=L=>normalizeWinding(
+    marching(F,L).map(c=>simplify(c,cell*0.3)).filter(c=>c.length>3));
+  for(let k=0;k<n;k++){
+    const tOut = cut(lo + (hi-lo)*(k/n));
+    const tIn  = cut(lo + (hi-lo)*((k+duty)/n));
+    const outer=at(tOut);
+    if(!outer.length) continue;
+    out.push(...outer);
+    for(const c of at(tIn)) out.push(c.slice().reverse());
+  }
+  return out;
+}
+
+/* The blurred field rarely reaches 1, so thresholds are taken as a fraction
+   of its own peak — that alone keeps thin strokes from breaking up under a
+   heavy blur. */
+function fieldPeak(F){
+  let peak=0;
+  for(let i=0;i<F.f.length;i++) if(F.f[i]>peak) peak=F.f[i];
+  return peak||1;
+}
+
+/* Darkness reshapes the falloff itself with a gamma curve, rather than moving
+   the cut-off. Moving the cut-off also squeezed the gap between successive
+   levels, so bands got thinner as you darkened them. Gamma leaves the
+   thresholds where they are and swells or shrinks the gradient underneath, so
+   every reading of it — plain, levels, isolines — gets heavier together.
+   Because thresholds are peak-relative and gamma is monotonic, the ink can
+   never vanish entirely at the light end. */
+function applyDarkness(F, d){
+  if(!d) return;
+  const g=Math.pow(2, -d/60);
+  for(let i=0;i<F.f.length;i++){
+    const v=F.f[i];
+    if(v>0 && v<1) F.f[i]=Math.pow(v,g);
+  }
+}
+
+function isolines(F,B,cell){
+  const n=Math.round(B.rings||0);
+  const plain=L=>marching(F,L).map(c=>simplify(c,cell*0.3)).filter(c=>c.length>3);
+  const peak=fieldPeak(F);
+  const cut=f=>Math.min(0.985, Math.max(0.02, peak*f));
+  if(n<1) return plain(cut(0.5));
+  const t=Math.max(3,B.thickness)*upm/2000;
+  let out=[];
+  for(let k=0;k<n;k++){
+    const L = cut(n===1 ? 0.5 : 0.08+k*(0.9-0.08)/(n-1));
+    for(const c of plain(L)){
+      const s=Math.sign(area(c))||1;
+      out.push(offsetContour(c,t,s), offsetContour(c,-t,s).reverse());
+    }
+  }
+  return out;
+}
+
+/* GRAIN — dot size follows the coverage */
+function blurStipple(F,cfg){
+  const out=[], b={x0:F.x0,y0:F.ytop-F.h*F.cell,x1:F.x0+F.w*F.cell,y1:F.ytop};
+  const A=(b.x1-b.x0)*(b.y1-b.y0);
+  const N=Math.min(70000, Math.round(A/(upm*upm)*cfg.density*1000));
+  const rMax=cfg.sizeMax*upm/1000, rMin=cfg.sizeMin*upm/1000, disc=SHAPES.circle;
+  for(let k=0;k<N;k++){
+    const x=b.x0+hash(k*1.37,k*0.11)*(b.x1-b.x0);
+    const y=b.y0+hash(k*0.71,k*2.19)*(b.y1-b.y0);
+    const v=sample(F,x,y); if(v<=0.02) continue;
+    if(hash(k*5.3+1,k*3.9+2)>v) continue;
+    const rr=rMin+(rMax-rMin)*v;
+    out.push(disc.map(p=>({x:x+p.x*rr*2, y:y+p.y*rr*2})));
+  }
+  return out;
+}
+
+/* Smooth value noise, bilinear between hashed lattice points. `hash` alone
+   is white noise: fine for deciding whether to keep a dot, useless for a
+   direction, because neighbours disagree. This is the continuous version. */
+function valueNoise(x,y){
+  const xi=Math.floor(x), yi=Math.floor(y), xf=x-xi, yf=y-yi;
+  const u=xf*xf*(3-2*xf), v=yf*yf*(3-2*yf);
+  return (hash(xi,yi)*(1-u)+hash(xi+1,yi)*u)*(1-v)
+       + (hash(xi,yi+1)*(1-u)+hash(xi+1,yi+1)*u)*v;
+}
+
+/* ── Flow fields ──
+   One direction for every point of the glyph's box, shared by HATCHING and
+   SPIKE so both speak the same vocabulary of modulations.
+
+   Iron filings are the reference, and the thing that makes them read as
+   filings rather than as mush is that neighbouring strokes agree. Randomising
+   each stroke on its own cannot produce that at any setting: it is either a
+   rigid grid or white noise, with nothing in between. The angle has to come
+   from something continuous, which is what every mode below is.
+
+   'parallel' is the degenerate case — a constant field — and stays the
+   default so an ordered hatch is still one click away. */
+function flowAngle(kind, x, y, B, base){
+  const cx=(B.x0+B.x1)/2, cy=(B.y0+B.y1)/2;
+  const R=Math.max(1, (B.x1-B.x0 + B.y1-B.y0)/4);
+  if(kind==='radial') return Math.atan2(y-cy, x-cx)+base;
+  if(kind==='swirl')  return Math.atan2(y-cy, x-cx)+Math.PI/2+base;
+  if(kind==='dipole'){
+    /* Two poles buried in the letter, one pushing one pulling. The softening
+       term keeps the field finite where a stroke lands on a pole. */
+    const py=cy, soft=R*R*0.004;
+    let fx=0, fy=0;
+    for(const [px,sg] of [[B.x0+(B.x1-B.x0)*0.18, 1], [B.x0+(B.x1-B.x0)*0.82, -1]]){
+      const dx=x-px, dy=y-py, r2=dx*dx+dy*dy+soft;
+      fx+=sg*dx/r2; fy+=sg*dy/r2;
+    }
+    if(!fx && !fy) return base;
+    return Math.atan2(fy,fx)+base;
+  }
+  if(kind==='turbulence')
+    return base + (valueNoise(x/(R*0.9), y/(R*0.9))-0.5)*Math.PI*2;
+  return base;
+}
+
+/* ── Resampling ──
+   Effects that displace points need a dense, regular polygon underneath. A
+   font outline is the opposite: long straight runs with nothing in between,
+   so a wave applied to their two endpoints only tilts the edge. Everything
+   below resamples first. */
+function resampleClosed(c, step){
+  if(c.length<3 || !(step>0)) return c.slice();
+  const out=[]; let carry=0;
+  for(let i=0;i<c.length;i++){
+    const p=c[i], q=c[(i+1)%c.length];
+    const dx=q.x-p.x, dy=q.y-p.y, L=Math.hypot(dx,dy);
+    if(L<1e-9) continue;
+    let t=carry;
+    while(t<L){ out.push({x:p.x+dx*t/L, y:p.y+dy*t/L}); t+=step; }
+    carry=t-L;
+    if(out.length>20000) return c.slice();
+  }
+  return out.length>2 ? out : c.slice();
+}
+
+/* ── SPIKE ──
+   Needles raised off the outline. Walking the contour, the direction to the
+   right of travel always points away from the filled region for an outer
+   ring and into the void for a counter — multiplying by the glyph's own
+   winding sign is what makes one convention serve both, so counters grow
+   inward spikes instead of everting.
+
+   `width` is what separates a splat from fur. At 1 each spike's base spans
+   the whole gap to the next one and the result is a continuous sawtooth. Cut
+   it down and the base narrows to a sliver, the original outline survives in
+   between, and the spikes read as needles standing off a straight edge.
+
+   Two things then modulate them. `aim` decides where a needle points: along
+   the outline's own normal, or along the shared flow field — aimed away from
+   the glyph's centre it becomes a burst radiating outwards, the same
+   construction as the shard effect.
+
+   `curve` decides how the lengths fall. 'even' spreads them symmetrically
+   about the nominal length. 'burst' cubes the draw, so nearly every needle
+   is short and a few are very long — that lopsidedness is what makes an
+   explosion rather than a hedgehog. 'alternate' just shortens every other
+   one. All three collapse to a uniform length when `vary` is 0. */
+function spikeContours(cs, cfg){
+  const S = windingSign(cs);
+  const w = Math.max(0.02, Math.min(1, cfg.width));
+  const t0 = 0.5 - w/2, t1 = 0.5 + w/2;
+  const B = bboxOf(cs), v = cfg.vary;
+  const lengthMul = (h,i) =>
+      cfg.curve==='burst'     ? 1 - v + v*4*h*h*h
+    : cfg.curve==='alternate' ? (i%2 ? 1 - v*0.8 : 1)
+    :                           1 + (h-0.5)*2*v;
+  const out=[];
+  for(const c of cs){
+    const rs = resampleClosed(c, cfg.gap);
+    const n = rs.length;
+    if(n<4){ out.push(c); continue; }
+    const ring=[];
+    for(let i=0;i<n;i++){
+      const p=rs[i], q=rs[(i+1)%n];
+      const dx=q.x-p.x, dy=q.y-p.y, L=Math.hypot(dx,dy)||1;
+      const mx=p.x+dx*0.5, my=p.y+dy*0.5;
+      ring.push(p);
+      let nx, ny;
+      if(cfg.aim==='normal'){
+        /* right of travel, flipped to the glyph's winding */
+        nx=(dy/L)*S; ny=(-dx/L)*S;
+      }else{
+        const a=flowAngle(cfg.aim, mx, my, B, 0);
+        nx=Math.cos(a); ny=Math.sin(a);
+      }
+      if(cfg.fan){
+        const a=(hash(i*0.91+3.3, i*0.17+2.1)-0.5)*2*cfg.fan;
+        const ca=Math.cos(a), sa=Math.sin(a);
+        const rx=nx*ca-ny*sa; ny=nx*sa+ny*ca; nx=rx;
+      }
+      const d = cfg.len * Math.max(0, lengthMul(hash(i*0.37+1.7, i*1.13+0.9), i));
+      ring.push({x:p.x+dx*t0, y:p.y+dy*t0});
+      ring.push({x:mx+nx*d, y:my+ny*d});
+      ring.push({x:p.x+dx*t1, y:p.y+dy*t1});
+    }
+    out.push(ring);
+  }
+  return out.length?out:cs;
+}
+
+/* ── HATCHING ──
+   Strokes on a lattice, each turned by the flow field under it. The lattice
+   keeps the placement even; the field keeps the directions agreeing with
+   their neighbours. `scatter` then loosens position, angle and length
+   together, so one slider carries the whole range from a drafting hatch to
+   a scribble without ever passing through white noise.
+
+   The lattice is laid out in ruling space (rows along +X) and rotated back
+   at the end, the same trick the line screen uses — cheaper than rotating
+   the field, and the spacing stays exact at any angle. */
+function hatching(F,cfg){
+  const out=[];
+  const th=cfg.angle, ct=Math.cos(th), st=Math.sin(th);
+  const world=(X,Y)=>({x:X*ct-Y*st, y:X*st+Y*ct});
+  const bx0=F.x0, bx1=F.x0+F.w*F.cell, by0=F.ytop-F.h*F.cell, by1=F.ytop;
+  const B={x0:bx0, y0:by0, x1:bx1, y1:by1};
+  let r0=1e9, r1=-1e9, c0=1e9, c1=-1e9;
+  for(const [x,y] of [[bx0,by0],[bx1,by0],[bx0,by1],[bx1,by1]]){
+    const X= x*ct+y*st, Y=-x*st+y*ct;
+    c0=Math.min(c0,X); c1=Math.max(c1,X); r0=Math.min(r0,Y); r1=Math.max(r1,Y);
+  }
+  const rowGap=Math.max(upm/500, cfg.spacing);
+  const pitch =Math.max(upm/500, cfg.pitch);
+  const rows=Math.ceil((r1-r0)/rowGap), cols=Math.ceil((c1-c0)/pitch);
+  if(rows*cols>60000 || rows<1 || cols<1) return null;
+  const sc=cfg.scatter;
+  const base=Array.from({length:14},(_,i)=>{const a=i/14*Math.PI*2;
+    return {x:Math.cos(a)*0.5, y:Math.sin(a)*0.5};});
+  for(let j=0;j<=rows;j++){
+    for(let i=0;i<=cols;i++){
+      let X=c0+(i+0.5)*pitch, Y=r0+(j+0.5)*rowGap;
+      if(sc){
+        X+=(hash(i*1.7+0.3, j*2.3+1.1)-0.5)*pitch*sc;
+        Y+=(hash(i*2.9+2.7, j*1.3+0.5)-0.5)*rowGap*sc*1.6;
+      }
+      const w0=world(X,Y);
+      if(sample(F, w0.x, w0.y) < 0.5) continue;
+      let a=flowAngle(cfg.flow, w0.x, w0.y, B, th);
+      if(sc) a += (hash(i*0.53+4.1, j*1.91+3.7)-0.5)*cfg.spread*sc;
+      const len=cfg.len * (sc ? 1+(hash(i*2.11+1.9, j*0.29+2.3)-0.5)*sc : 1);
+      const ca=Math.cos(a), sa=Math.sin(a);
+      out.push(base.map(q=>{
+        const px=q.x*len, py=q.y*cfg.weight;
+        return {x:w0.x+px*ca-py*sa, y:w0.y+px*sa+py*ca};
+      }));
+    }
+  }
+  return out.length?out:null;
+}
+
+/* Custom shape import (SVG or raster) */
+function normalize(cs){
+  const b=bboxOf(cs), w=b.x1-b.x0, h=b.y1-b.y0, s=1/Math.max(w,h,1e-6);
+  const cx=(b.x0+b.x1)/2, cy=(b.y0+b.y1)/2;
+  return cs.map(c=>c.map(p=>({x:(p.x-cx)*s, y:(p.y-cy)*s})));
+}
+function parseD(d){
+  if(!d) return [];
+  const toks=d.match(/[a-zA-Z]|-?\d*\.?\d+(?:e[-+]?\d+)?/gi)||[];
+  const cmds=[]; let i=0, cmd='', x=0,y=0,sx=0,sy=0;
+  const num=()=>parseFloat(toks[i++]);
+  while(i<toks.length){
+    if(/[a-zA-Z]/.test(toks[i])) cmd=toks[i++];
+    const rel=cmd===cmd.toLowerCase(), C=cmd.toUpperCase();
+    if(C==='M'){ const a=num(),b=num(); x=rel?x+a:a; y=rel?y+b:b; sx=x; sy=y; cmds.push({type:'M',x,y}); cmd=rel?'l':'L'; }
+    else if(C==='L'){ const a=num(),b=num(); x=rel?x+a:a; y=rel?y+b:b; cmds.push({type:'L',x,y}); }
+    else if(C==='H'){ const a=num(); x=rel?x+a:a; cmds.push({type:'L',x,y}); }
+    else if(C==='V'){ const a=num(); y=rel?y+a:a; cmds.push({type:'L',x,y}); }
+    else if(C==='C'){ const a=num(),b=num(),c=num(),dd=num(),e=num(),f=num();
+      const x1=rel?x+a:a,y1=rel?y+b:b,x2=rel?x+c:c,y2=rel?y+dd:dd; x=rel?x+e:e; y=rel?y+f:f;
+      cmds.push({type:'C',x1,y1,x2,y2,x,y}); }
+    else if(C==='S'||C==='Q'){ const a=num(),b=num(),c=num(),dd=num();
+      const x1=rel?x+a:a,y1=rel?y+b:b; x=rel?x+c:c; y=rel?y+dd:dd; cmds.push({type:'Q',x1,y1,x,y}); }
+    else if(C==='T'){ const a=num(),b=num(); x=rel?x+a:a; y=rel?y+b:b; cmds.push({type:'L',x,y}); }
+    else if(C==='A'){ num();num();num();num();num(); const e=num(),f=num(); x=rel?x+e:e; y=rel?y+f:f; cmds.push({type:'L',x,y}); }
+    else if(C==='Z'){ cmds.push({type:'Z'}); x=sx; y=sy; }
+    else i++;
+  }
+  return flatten(cmds,2).map(c=>c.map(p=>({x:p.x,y:-p.y})));
+}
+
+/* ══════════════════════════════════════════════════════════════
+   5. PIPELINE
+   ══════════════════════════════════════════════════════════════ */
+const cache=new Map();
+function stackStamp(){
+  return bakeVersion+'|'+JSON.stringify(stack.map(e=>[e.id,e.type,e.on,e.baked,e.p]));
+}
+function invalidate(){ cache.clear(); render(); }
+
+function baseGlyph(g){
+  if(baseOverride && baseOverride.has(g.index)) return baseOverride.get(g.index).map(c=>c.slice());
+  return flatten(g.path.commands, upm/60);
+}
+function processGlyph(g){
+  const k=stackStamp()+'|'+(baseOverride?'d':'')+'|'+g.index;
+  if(cache.has(k)) return cache.get(k);
+  let cs=baseGlyph(g);
+  for(const inst of stack){
+    if(inst.baked || !inst.on || !cs.length) continue;
+    try{ cs=REGISTRY[inst.type].apply(cs, inst.p); }catch(err){ console.warn(inst.type,err); }
+  }
+  cache.set(k,cs);
+  return cs;
+}
+const dPath = cs => cs.map(c=>'M'+c.map(p=>p.x.toFixed(1)+' '+p.y.toFixed(1)).join('L')+'Z').join('');
+
+/* ══════════════════════════════════════════════════════════════
+   6. RENDERING
+   The text box was the weak point of the old build: the SVG and the
+   textarea overlay used different metrics, so the caret drifted away
+   from the glyphs. Everything below derives from the same three
+   constants, and syncEditor() pushes them onto the textarea so the
+   caret always lands where the letters are.
+   ══════════════════════════════════════════════════════════════ */
+const PAD_EM    = 0.12;   // padding (top & sides) in em
+const LINE_LH   = 1.22;   // line-height ratio
+const ASC_RATIO = 0.78;   // approximate ascender height in em
+
+function syncEditor(){
+  const size = +document.getElementById('size').value;
+  const ed = document.getElementById('text');
+  ed.style.fontSize      = size + 'px';
+  ed.style.lineHeight    = LINE_LH;
+  ed.style.letterSpacing = (cfg.tracking * size / 1000) + 'px';
+  ed.style.textAlign     = cfg.align;
+  ed.style.padding       = (PAD_EM * size) + 'px';
+}
+
+function layout(text){
+  const items=[]; let pen=0;
+  const trackUnits = cfg.tracking * upm / 1000;
+  for(const ch of text){
+    const g=font.charToGlyph(ch);
+    if(ch!==' ') items.push({d:dPath(processGlyph(g).map(c=>c.map(p=>({x:p.x+pen,y:p.y}))))});
+    pen += (g.advanceWidth || upm*0.35) + trackUnits;
+  }
+  return {items, width:pen};
+}
+
+/* Width of a run of characters, in font units, including tracking. */
+function runWidth(str){
+  const trackUnits = cfg.tracking * upm / 1000;
+  let w=0;
+  for(const ch of str) w += (font.charToGlyph(ch).advanceWidth || upm*0.35) + trackUnits;
+  return w;
+}
+
+/* Greedy word wrap that mirrors what the browser does to the textarea:
+   break on spaces first, then hard-break any word too long for one line. */
+function wrapLine(text, maxW){
+  if(!text) return [''];
+  const out=[];
+  let line='';
+  const words=text.split(' ');
+  for(let i=0;i<words.length;i++){
+    const word=words[i];
+    const candidate = line==='' ? word : line+' '+word;
+    if(runWidth(candidate) <= maxW || line===''){
+      // Word itself may still overflow an empty line → hard-break it.
+      if(line==='' && runWidth(word) > maxW){
+        let chunk='';
+        for(const ch of word){
+          if(runWidth(chunk+ch) > maxW && chunk!==''){ out.push(chunk); chunk=ch; }
+          else chunk+=ch;
+        }
+        line=chunk;
+        continue;
+      }
+      line=candidate;
+    } else {
+      out.push(line);
+      i--;             // retry this word on the fresh line
+      line='';
+    }
+  }
+  out.push(line);
+  return out;
+}
+
+function renderPreview(){
+  const svg=document.getElementById('preview');
+  const box=document.getElementById('canvasbox');
+  const ed=document.getElementById('text');
+  box.style.background = cfg.colorBg || '';
+  if(artwork){ renderArtworkPreview(); return; }
+  if(!ready){ svg.innerHTML=''; return; }
+  const size=+document.getElementById('size').value;
+  const rect=box.getBoundingClientRect();
+  const scale=size/upm;
+
+  /* Everything below works in font units. The viewBox is locked to the box
+     size so 1 font unit always maps to `scale` CSS px — the same scale the
+     textarea uses. That is what keeps the caret on the glyphs. */
+  const W = rect.width/scale;
+  const H = rect.height/scale;
+  const pad = PAD_EM*upm;
+  const contentW = Math.max(1, W - 2*pad);
+
+  /* Same wrapping the textarea performs, applied to each hard line. */
+  const visual=[];
+  for(const hard of ed.value.split('\n')){
+    for(const vl of wrapLine(hard, contentW)) visual.push(vl);
+  }
+
+  let g='', y=0;
+  for(const ln of visual){
+    const L=layout(ln);
+    let xOff = pad;
+    if(cfg.align === 'center')     xOff = pad + (contentW - L.width)/2;
+    else if(cfg.align === 'right') xOff = pad + (contentW - L.width);
+    g += `<g transform="translate(${xOff} ${y})">`+L.items.map(it=>`<path d="${it.d}"/>`).join('')+`</g>`;
+    y -= upm*LINE_LH;
+  }
+
+  /* First baseline sits PAD_EM + ASC_RATIO em below the top edge — exactly
+     where the textarea puts its own first baseline. Scrolling the textarea
+     shifts the viewBox by the same amount so the two stay locked together. */
+  const scrollUnits = ed.scrollTop / scale;
+  svg.setAttribute('viewBox', `0 ${-(pad + upm*ASC_RATIO) + scrollUnits} ${W} ${H}`);
+  const inkColor = cfg.colorInk || themeInk();
+  svg.innerHTML = `<g transform="scale(1,-1)" style="fill:${inkColor}">${g}</g>`;
+}
+
+let raf, gridTimer, gridToken=0;
+
+function renderGrid(){
+  const grid=document.getElementById('grid');
+  if(artwork){ grid.innerHTML=''; return; }   /* no charset to proof */
+  grid.style.background = cfg.colorBg || '';
+  grid.innerHTML=CHARSET.map(c=>`<div class="cell" data-ch="${c.replace(/&/g,'&amp;').replace(/"/g,'&quot;')}" style="background:${cfg.colorBg||''}"></div>`).join('');
+  if(!ready) return;
+  /* A previous incremental fill may still be running — token it out so the
+     two don't interleave into the same cells. */
+  const myToken = ++gridToken;
+  const cells=[...grid.children]; let i=0;
+
+  /* Every cell shares ONE scale, so the glyphs keep their real proportions:
+     a full cap stands taller than an x-height letter, and a period stays a
+     period. Sizing each glyph to its own box made them all the same size,
+     which is exactly the inconsistency to avoid.
+
+     The common box is measured as we go and the cells are redrawn once at
+     the end, so the grid still fills progressively instead of sitting blank
+     while a heavy effect is computed. */
+  const paths=new Array(CHARSET.length).fill(null);
+  const boxes=new Array(CHARSET.length).fill(null);
+  let gx=1e9, gy0=1e9, gy1=-1e9, gw=1;
+
+  const draw=(k)=>{
+    const b=boxes[k]; if(!b) return;
+    const pad=(gy1-gy0)*0.10;
+    /* Square viewport: tall enough for the whole alphabet's vertical range,
+       wide enough for the widest glyph. */
+    const s=Math.max(gy1-gy0, gw)+pad*2;
+    const cx=(b.x0+b.x1)/2;                 // centre each glyph horizontally
+    const cy=(gy0+gy1)/2;                   // but hold one baseline for all
+    const inkCol = cfg.colorInk || themeInk();
+    cells[k].innerHTML=`<svg viewBox="${(cx-s/2).toFixed(1)} ${(-(cy+s/2)).toFixed(1)} ${s.toFixed(1)} ${s.toFixed(1)}">`+
+      `<g transform="scale(1,-1)" style="fill:${inkCol}"><path d="${paths[k]}"/></g></svg>`;
+  };
+
+  (function step(){
+    if(myToken !== gridToken) return;
+    const t0=performance.now();
+    while(i<CHARSET.length && performance.now()-t0<28){
+      const g=font.charToGlyph(CHARSET[i]);
+      const cs=processGlyph(g);
+      if(cs.length){
+        const b=bboxOf(cs);
+        boxes[i]=b; paths[i]=dPath(cs);
+        gy0=Math.min(gy0,b.y0); gy1=Math.max(gy1,b.y1);
+        gw=Math.max(gw, b.x1-b.x0);
+        draw(i);
+      }
+      i++;
+    }
+    if(i<CHARSET.length){ setTimeout(step,0); return; }
+    /* Final pass: the common box is settled, so restate every cell against
+       it. Cheap — the outlines are already computed and stringified. */
+    for(let k=0;k<CHARSET.length;k++) draw(k);
+  })();
+}
+/* The preview holds a handful of glyphs; the grid holds the whole charset.
+   Dragging a slider must not pay for the grid on every frame, so the preview
+   repaints immediately and the grid follows once the value settles. */
+function render(){
+  cancelAnimationFrame(raf);
+  raf=requestAnimationFrame(renderPreview);
+  clearTimeout(gridTimer);
+  gridTimer=setTimeout(renderGrid, 180);
+}
+function renderNow(){ cancelAnimationFrame(raf); clearTimeout(gridTimer); renderPreview(); renderGrid(); }
+
+/* ══════════════════════════════════════════════════════════════
+   6b. SVG SOURCE
+   Shapes are read into the same contour format the glyph pipeline
+   uses, scaled to cap height and sat on the baseline — so every
+   effect, the montage and the SVG export work unchanged.
+   ══════════════════════════════════════════════════════════════ */
+function svgTextToContours(txt){
+  const doc=new DOMParser().parseFromString(txt,'image/svg+xml');
+  if(doc.querySelector('parsererror')) return [];
+  let cs=[];
+  doc.querySelectorAll('path').forEach(el=> cs=cs.concat(parseD(el.getAttribute('d'))));
+  doc.querySelectorAll('polygon,polyline').forEach(el=>{
+    const pts=(el.getAttribute('points')||'').trim().split(/[\s,]+/).map(Number);
+    const c=[]; for(let i=0;i<pts.length-1;i+=2) c.push({x:pts[i],y:-pts[i+1]});
+    if(c.length>2) cs.push(c); });
+  doc.querySelectorAll('rect').forEach(el=>{
+    const x=+el.getAttribute('x')||0, y=+el.getAttribute('y')||0,
+          w=+el.getAttribute('width')||0, h=+el.getAttribute('height')||0;
+    if(w&&h) cs.push([{x,y:-y},{x:x+w,y:-y},{x:x+w,y:-y-h},{x,y:-y-h}]); });
+  doc.querySelectorAll('circle,ellipse').forEach(el=>{
+    const cx=+el.getAttribute('cx')||0, cy=+el.getAttribute('cy')||0,
+          rx=+(el.getAttribute('rx')||el.getAttribute('r'))||0,
+          ry=+(el.getAttribute('ry')||el.getAttribute('r'))||0;
+    if(rx&&ry) cs.push(Array.from({length:48},(_,i)=>{const a=i/48*Math.PI*2;
+      return {x:cx+Math.cos(a)*rx, y:-(cy+Math.sin(a)*ry)};})); });
+  return cs.filter(c=>c.length>2);
+}
+
+/* An imported drawing has no winding convention: a counter drawn the same
+   way round as its container fills in. Nest the contours and alternate. */
+function orientForHoles(cs){
+  const inside=(pt,c)=>{
+    let hit=false;
+    for(let i=0,j=c.length-1;i<c.length;j=i++){
+      const a=c[i], b=c[j];
+      if((a.y>pt.y)!==(b.y>pt.y) &&
+         pt.x < (b.x-a.x)*(pt.y-a.y)/((b.y-a.y)||1e-9)+a.x) hit=!hit;
+    }
+    return hit;
+  };
+  return cs.map(c=>{
+    let depth=0;
+    for(const o of cs) if(o!==c && inside(c[0], o)) depth++;
+    const want = depth%2 ? -1 : 1;
+    return (Math.sign(area(c))||1)===want ? c : c.slice().reverse();
+  });
+}
+
+function setArtwork(cs, name){
+  if(!cs||!cs.length){ setNote('SVG unreadable — needs paths or basic shapes.'); return; }
+  cs=orientForHoles(cs);
+  const b=bboxOf(cs);
+  const s=(upm*0.72)/Math.max(1e-6, b.y1-b.y0);      // stands cap-height tall
+  artwork={ name,
+    contours: cs.map(c=>c.map(p=>({x:(p.x-b.x0)*s, y:(p.y-b.y0)*s}))),
+    width:(b.x1-b.x0)*s };
+  document.body.classList.add('artwork');
+  const chip=document.getElementById('svgChipName'); if(chip) chip.textContent=name;
+  const gc=document.getElementById('glyphCount');
+  if(gc) gc.textContent=artwork.contours.length+' contours';
+  setFontLabel(name); setNote('SVG loaded');
+  syncExportState();
+  cache.clear(); renderNow();
+}
+function clearArtwork(silent){
+  if(!artwork) return;
+  artwork=null;
+  document.body.classList.remove('artwork');
+  const gc=document.getElementById('glyphCount');
+  if(gc && font) gc.textContent=(font.numGlyphs||'—')+' glyphs';
+  setFontLabel(font ? fontName : '—');
+  syncExportState();
+  if(!silent){ setNote('Back to text'); cache.clear(); renderNow(); }
+}
+/* .otf export writes a charset — meaningless for a single drawing. */
+function syncExportState(){
+  const b=document.getElementById('otfBtn');
+  if(b){ b.disabled=!!artwork; b.title=artwork?'Load a font to export .otf':''; }
+}
+/* Same stack, applied to the drawing. Baked steps are replayed from the
+   original outlines, since baking only rewrites glyph bases. */
+function processArtwork(){
+  const k=stackStamp()+'|artwork';
+  if(cache.has(k)) return cache.get(k);
+  let cs=artwork.contours.map(c=>c.map(p=>({x:p.x,y:p.y})));
+  for(const inst of stack){
+    if(!inst.on || !cs.length) continue;
+    try{ cs=REGISTRY[inst.type].apply(cs, inst.p); }catch(err){ console.warn(inst.type,err); }
+  }
+  cache.set(k,cs);
+  return cs;
+}
+function renderArtworkPreview(){
+  const svg=document.getElementById('preview'), box=document.getElementById('canvasbox');
+  const size=+document.getElementById('size').value, scale=size/upm;
+  const rect=box.getBoundingClientRect();
+  const W=rect.width/scale, H=rect.height/scale, pad=PAD_EM*upm;
+  const contentW=Math.max(1, W-2*pad);
+  const cs=processArtwork();
+  if(!cs.length){ svg.innerHTML=''; return; }
+  const b=bboxOf(cs), w=b.x1-b.x0;
+  let xOff=pad-b.x0;
+  if(cfg.align==='center')     xOff=pad+(contentW-w)/2-b.x0;
+  else if(cfg.align==='right') xOff=pad+contentW-w-b.x0;
+  svg.setAttribute('viewBox', `0 ${-(pad+upm*ASC_RATIO)} ${W} ${H}`);
+  const artInk = cfg.colorInk || themeInk();
+  svg.innerHTML=`<g transform="scale(1,-1)" style="fill:${artInk}">`+
+    `<g transform="translate(${xOff} 0)"><path d="${dPath(cs)}"/></g></g>`;
+}
+function exportArtworkSVG(){
+  const cs=processArtwork(); if(!cs.length) return;
+  const b=bboxOf(cs), m=upm*0.06, W=(b.x1-b.x0)+2*m, H=(b.y1-b.y0)+2*m;
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${(b.x0-m).toFixed(1)} ${(-(b.y1+m)).toFixed(1)} ${W.toFixed(1)} ${H.toFixed(1)}">`+
+    `<rect x="${(b.x0-m).toFixed(1)}" y="${(-(b.y1+m)).toFixed(1)}" width="${W.toFixed(1)}" height="${H.toFixed(1)}" fill="${cfg.colorBg||'#ffffff'}"/>`+
+    `<g transform="scale(1,-1)" fill="${cfg.colorInk||'#000000'}"><path d="${dPath(cs)}"/></g></svg>`;
+  dl(new Blob([svg],{type:'image/svg+xml'}), fname()+'.svg');
+}
+
+/* ══════════════════════════════════════════════════════════════
+   7. EXPORTS
+   ══════════════════════════════════════════════════════════════ */
+function exportSVG(){
+  if(artwork) return exportArtworkSVG();
+  if(!ready) return;
+  const lines=document.getElementById('text').value.split('\n');
+  let g='', y=0, maxW=0;
+  const laidOut=[], widths=[];
+  for(const ln of lines){ const L=layout(ln); maxW=Math.max(maxW,L.width); laidOut.push(L); widths.push(L.width); }
+  for(let i=0;i<laidOut.length;i++){
+    const L=laidOut[i], w=widths[i];
+    let xOff=0;
+    if(cfg.align === 'center')     xOff=(maxW-w)/2;
+    else if(cfg.align === 'right') xOff=maxW-w;
+    g+=`<g transform="translate(${xOff} ${y})">`+L.items.map(it=>`<path d="${it.d}"/>`).join('')+`</g>`;
+    y-=upm*LINE_LH;
+  }
+  const H=upm*LINE_LH*lines.length;
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 ${-upm*0.85} ${maxW} ${H}">`+
+    `<rect x="0" y="${-upm*0.85}" width="${maxW}" height="${H}" fill="${cfg.colorBg||'#ffffff'}"/>`+
+    `<g transform="scale(1,-1)" fill="${cfg.colorInk||'#000000'}">${g}</g></svg>`;
+  dl(new Blob([svg],{type:'image/svg+xml'}), fname()+'.svg');
+}
+function exportOTF(){
+  if(artwork){ setNote('OTF needs a font — the SVG exports as .svg.'); return; }
+  if(!ready) return;
+  const trackUnits = cfg.tracking * upm / 1000;
+  const glyphs=[new opentype.Glyph({name:'.notdef',unicode:0,advanceWidth:upm*0.5,path:new opentype.Path()})];
+  for(const ch of CHARSET){
+    const src=font.charToGlyph(ch), p=new opentype.Path();
+    for(const c of processGlyph(src)){ p.moveTo(c[0].x,c[0].y);
+      for(let i=1;i<c.length;i++) p.lineTo(c[i].x,c[i].y); p.close(); }
+    const advance = Math.max(1, (src.advanceWidth||upm*0.5) + trackUnits);
+    glyphs.push(new opentype.Glyph({name:src.name||('uni'+ch.charCodeAt(0)),
+      unicode:ch.charCodeAt(0), advanceWidth:advance, path:p}));
+  }
+  const spaceAdv = Math.max(1, (font.charToGlyph(' ').advanceWidth||upm*0.3) + trackUnits);
+  glyphs.push(new opentype.Glyph({name:'space',unicode:32,advanceWidth:spaceAdv,path:new opentype.Path()}));
+  const out=new opentype.Font({familyName:fname(), styleName:'Regular', unitsPerEm:upm,
+    ascender:font.ascender, descender:font.descender, glyphs});
+  dl(new Blob([out.toArrayBuffer()],{type:'font/otf'}), fname()+'.otf');
+}
+const fname=()=>{
+  const label = document.getElementById('fontLabel').textContent.trim();
+  const base = label && label !== '—' ? label.replace(/\.[a-z]+$/i,'').replace(/\s+/g,'-') : 'Font';
+  return base + '-Refonte';
+};
+function dl(blob,fn){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=fn; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); }
+
+/* ══════════════════════════════════════════════════════════════
+   7b. MONTAGE — keyframes, playback, GIF / MP4 export
+
+   The keyframe model is "poses": a keyframe stores a snapshot of the
+   whole effect stack. You set up a look, drop a key, change the sliders,
+   drop another — and the two are interpolated. That fits how these
+   effects are actually dialled in, and avoids a per-parameter lane UI
+   that would swamp the sidebar.
+   ══════════════════════════════════════════════════════════════ */
+
+const anim = {
+  open:false, duration:3, fps:30, ease:'inout',
+  keys:[],            // [{t, state}] sorted by t
+  playing:false, t:0, cur:-1,
+  size:720, rendering:false
+};
+
+/* A pose is a deep copy of the stack: which effects, on/off, and every
+   parameter value. Non-numeric values (shape name, custom outline) ride
+   along and snap rather than interpolate. */
+function animSnapshot(){
+  /* Carry the instance id: the same effect can now appear twice in the stack,
+     so matching poses by type alone would blend the wrong pair. */
+  return stack.map(e=>({id:e.id, type:e.type, on:e.on, baked:!!e.baked,
+                        p:Object.assign({}, e.p)}));
+}
+
+const EASE = {
+  linear: t=>t,
+  inout:  t=> t<0.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2,
+  in:     t=> t*t,
+  out:    t=> 1-(1-t)*(1-t)
+};
+
+/* Blend two poses. Numbers interpolate; anything else takes the
+   nearer pose, so a shape swap flips at the midpoint instead of
+   producing nonsense halfway. */
+function animBlend(a, b, u){
+  const out=[];
+  for(const ea of a){
+    const eb = b.find(x=>x.id===ea.id);
+    if(!eb){ out.push(Object.assign({},ea,{p:Object.assign({},ea.p)})); continue; }
+    const p={};
+    for(const k in ea.p){
+      const va=ea.p[k], vb=eb.p[k];
+      p[k] = (typeof va==='number' && typeof vb==='number')
+        ? va+(vb-va)*u
+        : (u<0.5 ? va : vb);
+    }
+    out.push({id:ea.id, type:ea.type, baked:ea.baked, on:(u<0.5?ea.on:eb.on), p});
+  }
+  /* Effects that only exist in the later pose fade in at the midpoint. */
+  for(const eb of b) if(!a.find(x=>x.id===eb.id) && u>=0.5)
+    out.push(Object.assign({},eb,{p:Object.assign({},eb.p)}));
+  return out;
+}
+
+/* Resolve the pose at time t (seconds) and push it onto the live stack. */
+function animApply(t){
+  const K=anim.keys;
+  if(!K.length) return;
+  let pose;
+  if(K.length===1 || t<=K[0].t) pose=K[0].state;
+  else if(t>=K[K.length-1].t) pose=K[K.length-1].state;
+  else{
+    let i=0; while(i<K.length-1 && K[i+1].t<t) i++;
+    const A=K[i], B=K[i+1];
+    const span=(B.t-A.t)||1e-6;
+    const u=EASE[anim.ease]((t-A.t)/span);
+    pose=animBlend(A.state, B.state, u);
+  }
+  stack.length=0;
+  for(const e of pose) stack.push({id:e.id, type:e.type, on:e.on, baked:!!e.baked,
+                                   open:false, p:Object.assign({},e.p)});
+  cache.clear();
+}
+
+function animSort(){ anim.keys.sort((a,b)=>a.t-b.t); }
+
+function animAddKey(t){
+  let time = Math.max(0, Math.min(anim.duration, t===undefined?anim.t:t));
+  /* The playhead starts on the first key, so a plain "+ keyframe" would
+     otherwise keep overwriting it and you could never build a second pose.
+     When the playhead already sits on a key, drop the new one at the end of
+     the clip — or halfway to the next key if the end is taken. */
+  if(t===undefined && anim.keys.some(k=>Math.abs(k.t-time)<0.02)){
+    if(!anim.keys.some(k=>Math.abs(k.t-anim.duration)<0.02)) time=anim.duration;
+    else{
+      const next=anim.keys.find(k=>k.t>time+0.02);
+      if(next) time=(time+next.t)/2;
+    }
+  }
+  const existing = anim.keys.find(k=>Math.abs(k.t-time)<0.02);
+  if(existing) existing.state=animSnapshot();
+  else anim.keys.push({t:time, state:animSnapshot()});
+  animSort();
+  anim.t=time;
+  anim.cur=anim.keys.findIndex(k=>Math.abs(k.t-time)<0.02);
+  renderAnim();
+}
+function animDeleteKey(i){ anim.keys.splice(i,1); renderAnim(); }
+
+function animGoto(t, opts){
+  anim.t=Math.max(0,Math.min(anim.duration,t));
+  animApply(anim.t);
+  renderPreview();
+  if(!opts||!opts.quiet){ renderAnimScrub(); renderSidebar(); }
+}
+
+/* ── Playback ───────────────────────────────────────────────── */
+let animRAF=null, animT0=0;
+function animPlay(){
+  if(anim.playing || anim.keys.length<2) return;
+  anim.playing=true;
+  animT0=performance.now()-anim.t*1000;
+  const step=()=>{
+    if(!anim.playing) return;
+    let t=(performance.now()-animT0)/1000;
+    if(t>anim.duration){ t=t%anim.duration; animT0=performance.now()-t*1000; }
+    anim.t=t;
+    animApply(t);
+    renderPreview();          // preview only — the grid is far too slow at 30fps
+    renderAnimScrub();
+    animRAF=requestAnimationFrame(step);
+  };
+  animRAF=requestAnimationFrame(step);
+  renderAnimButtons();
+}
+function animStop(){
+  anim.playing=false;
+  if(animRAF) cancelAnimationFrame(animRAF);
+  renderAnimButtons();
+  renderSidebar();
+  render();
+}
+
+/* ── Frame rendering ────────────────────────────────────────── */
+/* Lay the text out and return raw contours (not path strings) so we can
+   fill them straight onto a canvas. */
+function layoutContours(text){
+  const out=[]; let pen=0;
+  const trackUnits=cfg.tracking*upm/1000;
+  for(const ch of text){
+    const g=font.charToGlyph(ch);
+    if(ch!==' ')
+      for(const c of processGlyph(g)) out.push(c.map(p=>({x:p.x+pen, y:p.y})));
+    pen += (g.advanceWidth||upm*0.35) + trackUnits;
+  }
+  return {contours:out, width:pen};
+}
+function frameContours(){
+  if(artwork) return processArtwork().map(c=>c.slice());
+  const lines=document.getElementById('text').value.split('\n');
+  const laid=lines.map(l=>layoutContours(l));
+  const maxW=Math.max(1,...laid.map(l=>l.width));
+  const all=[];
+  laid.forEach((L,i)=>{
+    let xOff=0;
+    if(cfg.align==='center') xOff=(maxW-L.width)/2;
+    else if(cfg.align==='right') xOff=maxW-L.width;
+    const yOff=-i*upm*LINE_LH;
+    for(const c of L.contours) all.push(c.map(p=>({x:p.x+xOff, y:p.y+yOff})));
+  });
+  return all;
+}
+
+/* Sample the whole clip once to get a bounding box that covers every
+   frame. Without this the export would zoom in and out as the geometry
+   grows and shrinks — the most visible possible artefact. */
+function animGlobalBox(samples){
+  const saved=animSnapshot(), savedT=anim.t;
+  let b={x0:1e9,y0:1e9,x1:-1e9,y1:-1e9};
+  const n=Math.max(2,samples||14);
+  for(let i=0;i<n;i++){
+    animApply(anim.duration*i/(n-1));
+    for(const c of frameContours()) for(const p of c){
+      if(p.x<b.x0)b.x0=p.x; if(p.x>b.x1)b.x1=p.x;
+      if(p.y<b.y0)b.y0=p.y; if(p.y>b.y1)b.y1=p.y;
+    }
+  }
+  if(b.x0>b.x1){ b={x0:0,y0:0,x1:upm,y1:upm}; }
+  stack.length=0;
+  for(const e of saved) stack.push({id:e.id,type:e.type,on:e.on,baked:!!e.baked,open:false,p:Object.assign({},e.p)});
+  cache.clear();
+  anim.t=savedT;
+  return b;
+}
+
+/* Every raster/video export goes through this: a 2D context pinned to sRGB.
+   Left to itself the browser can hand back a display-P3 buffer on a wide-gamut
+   Mac, and the exported colours then no longer match the hex you dialled in. */
+function exportCtx(cv){
+  let ctx=null;
+  try{ ctx=cv.getContext('2d',{colorSpace:'srgb', willReadFrequently:true}); }catch(e){}
+  return ctx || cv.getContext('2d');
+}
+
+/* `transparent` skips the background fill so the caller can key it out.
+   Anything that can't carry alpha (MP4) leaves it off and gets the flat fill. */
+function drawFrame(ctx, W, H, box, opts){
+  const transparent = !!(opts && opts.transparent);
+  ctx.save();
+  ctx.clearRect(0,0,W,H);
+  if(!transparent){
+    ctx.fillStyle=cfg.colorBg||'#ffffff';
+    ctx.fillRect(0,0,W,H);
+  }
+  const pad=0.08;
+  const bw=Math.max(1,box.x1-box.x0), bh=Math.max(1,box.y1-box.y0);
+  const s=Math.min(W*(1-pad*2)/bw, H*(1-pad*2)/bh);
+  ctx.translate(W/2, H/2);
+  ctx.scale(s,-s);                                  // flip: font y is up
+  ctx.translate(-(box.x0+box.x1)/2, -(box.y0+box.y1)/2);
+  ctx.fillStyle=cfg.colorInk||'#000000';
+  ctx.beginPath();
+  for(const c of frameContours()){
+    ctx.moveTo(c[0].x,c[0].y);
+    for(let i=1;i<c.length;i++) ctx.lineTo(c[i].x,c[i].y);
+    ctx.closePath();
+  }
+  ctx.fill('nonzero');
+  ctx.restore();
+}
+
+const animProg = m => { const el=document.getElementById('animProg'); if(el) el.textContent=m||''; };
+
+function loadScript(url, ms){
+  return new Promise((res,rej)=>{
+    const s=document.createElement('script');
+    /* A script tag that never fires either event would leave the export
+       stuck on "Loading encoder..." forever, so time it out. */
+    const timer=setTimeout(()=>rej(new Error('encoder download timed out')), ms||20000);
+    s.src=url;
+    s.onload=()=>{ clearTimeout(timer); res(); };
+    s.onerror=()=>{ clearTimeout(timer); rej(new Error('could not load encoder (offline?)')); };
+    document.head.appendChild(s);
+  });
+}
+
+/* The colour space every export declares: sRGB IEC 61966-2-1. `transfer` is
+   the part that actually matters — a canvas holds sRGB-encoded values, and a
+   file that forgets to say so gets read back as BT.709 and shifts. */
+const SRGB = {primaries:'bt709', transfer:'iec61966-2-1', matrix:'bt709', fullRange:false};
+
+/* No background colour set means transparent, not white. */
+const bgIsTransparent = () => !cfg.colorBg;
+
+/* GIF has one-bit alpha and no alpha channel of its own: transparency is a
+   colour key. Pick a key as far from the ink as possible so the quantiser
+   can't confuse the two. */
+function pickKey(){
+  const ink=hex2rgb(cfg.colorInk||'#000000')||[0,0,0];
+  const d2=c=>(c[0]-ink[0])**2+(c[1]-ink[1])**2+(c[2]-ink[2])**2;
+  const cands=[[255,0,255],[0,255,0],[0,255,255],[255,255,0],[255,0,0],[0,0,255]];
+  return cands.reduce((a,b)=>d2(b)>d2(a)?b:a);
+}
+
+/* Draw one frame as exactly two colours: ink where the glyph covers at least
+   half a pixel, key everywhere else. Thresholding rather than letting the
+   antialiased edge through is what keeps the cut-out clean — blended edge
+   pixels survive quantisation and leave a coloured halo around every letter. */
+function keyedFrame(ctx, W, H, box, key){
+  drawFrame(ctx, W, H, box, {transparent:true});
+  const img=ctx.getImageData(0,0,W,H), d=img.data;
+  const ink=hex2rgb(cfg.colorInk||'#000000')||[0,0,0];
+  for(let i=0;i<d.length;i+=4){
+    const on = d[i+3]>=128;
+    d[i]  = on?ink[0]:key[0];
+    d[i+1]= on?ink[1]:key[1];
+    d[i+2]= on?ink[2]:key[2];
+    d[i+3]= 255;
+  }
+  return img;
+}
+
+/* ── GIF export ─────────────────────────────────────────────── */
+async function exportGIF(){
+  if(anim.rendering || anim.keys.length<2) return;
+  anim.rendering=true; animStop(); renderAnimButtons();
+  const saved=animSnapshot();
+  let msg='';
+  try{
+    animProg('Loading encoder…');
+    if(!window.GIF) await loadScript('/vendor/gif.js');
+    if(!window.GIF) throw new Error('encoder did not load');
+    /* gif.js spawns its worker from a URL. Now that the worker ships from our
+       own origin the browser will take the path directly — the old fetch-and-
+       wrap-in-a-blob dance only existed to get around the cross-origin refusal. */
+    const workerURL='/vendor/gif.worker.js';
+
+    const W=anim.size, H=anim.size, fps=anim.fps;
+    const frames=Math.max(2,Math.round(anim.duration*fps));
+    const box=animGlobalBox();
+    const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+    const ctx=exportCtx(cv);
+
+    const alpha=bgIsTransparent();
+    const key=alpha?pickKey():null;
+    const keyHex=alpha?rgb2hex(key):(cfg.colorBg||'#ffffff');
+
+    const gif=new window.GIF({workers:2, quality:8, width:W, height:H,
+      workerScript:workerURL, background:keyHex,
+      /* gif.js takes the key as a packed 0xRRGGBB int, and forces disposal
+         mode 2 (restore to background) once it's set — which is exactly what
+         an animation with a cut-out background needs. */
+      transparent: alpha ? ((key[0]<<16)|(key[1]<<8)|key[2]) : null});
+
+    for(let i=0;i<frames;i++){
+      animApply(anim.duration*i/frames);
+      if(alpha){
+        gif.addFrame(keyedFrame(ctx,W,H,box,key), {delay:Math.round(1000/fps)});
+      }else{
+        drawFrame(ctx,W,H,box);
+        gif.addFrame(ctx, {copy:true, delay:Math.round(1000/fps)});
+      }
+      if(i%4===0){ animProg('Rendering '+Math.round(i/frames*100)+'%'); await new Promise(r=>setTimeout(r)); }
+    }
+    animProg('Encoding GIF…');
+    const blob=await new Promise((res,rej)=>{
+      gif.on('finished', res); gif.on('abort',()=>rej(new Error('aborted')));
+      gif.render();
+    });
+    dl(blob, fname()+'.gif');
+    msg='GIF saved ('+Math.round(blob.size/1024)+' KB'+(alpha?', transparent':'')+')';
+  }catch(err){
+    console.error(err);
+    msg='GIF export failed: '+err.message;
+  }finally{
+    stack.length=0;
+    for(const e of saved) stack.push({id:e.id,type:e.type,on:e.on,baked:!!e.baked,open:true,p:Object.assign({},e.p)});
+    anim.rendering=false; cache.clear(); renderSidebar(); renderAnim(); render();
+    animProg(msg);          // re-render wiped the panel, so restate the outcome
+  }
+}
+
+/* ── MP4 export (WebCodecs) with a recorder fallback ─────────── */
+function canWebCodecs(){
+  return typeof window.VideoEncoder==='function' && typeof window.VideoFrame==='function';
+}
+
+/* H.264 is signalled as profile + constraint flags + level, and the level caps
+   the frame size: the old avc1.42001f is Baseline @ 3.1, which tops out at
+   1280x720 — so every export at the 1080 preset was refused by the encoder.
+   Ask the browser what it will actually take instead of guessing. */
+async function pickAvcConfig(W,H,fps){
+  const cands=['avc1.640034','avc1.4d0034','avc1.420034',   // High / Main / Baseline @ 5.2
+               'avc1.640028','avc1.4d0028','avc1.420028',   // ... @ 4.0
+               'avc1.42001f'];                              // Baseline @ 3.1
+  const base={width:W, height:H, bitrate:6_000_000, framerate:fps,
+    /* mp4-muxer needs an AVCC record (the `description`), not Annex B.
+       That is the spec default, but a browser that guesses the other way
+       leaves the muxer with nothing to write into avcC. */
+    avc:{format:'avc'}};
+  if(typeof window.VideoEncoder.isConfigSupported!=='function')
+    return Object.assign({codec:cands[0]}, base);
+  for(const codec of cands){
+    try{
+      const r=await window.VideoEncoder.isConfigSupported(Object.assign({codec}, base));
+      if(r && r.supported) return r.config || Object.assign({codec}, base);
+    }catch(e){ /* an unknown codec string throws rather than returning false */ }
+  }
+  return null;
+}
+
+/* Force the sRGB transfer function onto whatever the encoder reports.
+   The canvas holds sRGB-encoded values; a file that doesn't say so is read
+   back as BT.709 and the midtones lift. Primaries and matrix are kept as the
+   encoder actually produced them — claiming full range or identity matrix on
+   a 4:2:0 stream would shift the levels for real. */
+function srgbColorSpace(reported){
+  const cs=Object.assign({}, SRGB);
+  if(reported) for(const k of ['primaries','matrix','fullRange'])
+    if(reported[k]!==null && reported[k]!==undefined) cs[k]=reported[k];
+  cs.transfer='iec61966-2-1';                       // IEC 61966-2-1, i.e. sRGB
+  /* mp4-muxer only maps a handful of names; anything else would write a
+     garbage colr box, so clamp to something it knows. */
+  if(['bt709','bt470bg','smpte170m'].indexOf(cs.primaries)<0) cs.primaries='bt709';
+  if(['rgb','bt709','bt470bg','smpte170m'].indexOf(cs.matrix)<0) cs.matrix='bt709';
+  return cs;
+}
+
+async function encodeMP4(cv, ctx, W, H, box, frames, fps){
+  animProg('Loading muxer…');
+  if(!window.Mp4Muxer) await loadScript('/vendor/mp4-muxer.js');
+  if(!window.Mp4Muxer) throw new Error('muxer did not load');
+
+  const config=await pickAvcConfig(W,H,fps);
+  if(!config) throw new Error('no H.264 encoder for '+W+'\u00d7'+H);
+
+  const muxer=new window.Mp4Muxer.Muxer({
+    target:new window.Mp4Muxer.ArrayBufferTarget(),
+    video:{codec:'avc', width:W, height:H, frameRate:fps},
+    fastStart:'in-memory'
+  });
+
+  /* The old code logged encoder errors and carried on, so a refused config
+     still finalised a container with an empty track: a .mp4 that downloads
+     and then won't open anywhere. Errors now stop the export. */
+  let encErr=null, chunks=0;
+  const encoder=new window.VideoEncoder({
+    output:(chunk,meta)=>{
+      let m=meta;
+      if(m && m.decoderConfig){
+        m=Object.assign({}, m, {decoderConfig:Object.assign({}, m.decoderConfig,
+          {colorSpace:srgbColorSpace(m.decoderConfig.colorSpace)})});
+      }
+      chunks++;
+      try{ muxer.addVideoChunk(chunk, m); }catch(e){ encErr=encErr||e; }
+    },
+    error:e=>{ encErr=encErr||e; }
+  });
+  encoder.configure(config);
+
+  const bail=()=>{ if(encErr) throw (encErr instanceof Error?encErr:new Error(String(encErr))); };
+
+  try{
+    for(let i=0;i<frames;i++){
+      bail();
+      animApply(anim.duration*i/frames);
+      drawFrame(ctx,W,H,box);                       // H.264 has no alpha: flat fill
+      const vf=new window.VideoFrame(cv,{timestamp:Math.round(i*1e6/fps), duration:Math.round(1e6/fps)});
+      try{ encoder.encode(vf,{keyFrame:i%Math.round(fps)===0}); }
+      finally{ vf.close(); }
+      if(i%4===0){ animProg('Rendering '+Math.round(i/frames*100)+'%'); await new Promise(r=>setTimeout(r)); }
+      /* Don't let the encoder queue run away on long clips. */
+      while(encoder.encodeQueueSize>12 && !encErr) await new Promise(r=>setTimeout(r));
+    }
+    bail();
+    animProg('Encoding MP4…');
+    await encoder.flush();
+    bail();
+  }finally{
+    if(encoder.state!=='closed') try{ encoder.close(); }catch(e){}
+  }
+
+  if(!chunks) throw new Error('encoder returned no frames');
+  muxer.finalize();
+  const buf=muxer.target.buffer;
+  if(!buf || !buf.byteLength) throw new Error('muxer produced an empty file');
+  return {blob:new Blob([buf],{type:'video/mp4'}), ext:'mp4'};
+}
+
+async function exportMP4(){
+  if(anim.rendering || anim.keys.length<2) return;
+  anim.rendering=true; animStop(); renderAnimButtons();
+  const saved=animSnapshot();
+  let msg='';
+  try{
+    const W=anim.size, H=anim.size, fps=anim.fps;
+    const frames=Math.max(2,Math.round(anim.duration*fps));
+    const box=animGlobalBox();
+    const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+    const ctx=exportCtx(cv);
+
+    let out=null, why='';
+    if(canWebCodecs()){
+      try{ out=await encodeMP4(cv,ctx,W,H,box,frames,fps); }
+      catch(err){ console.error(err); why=err.message||String(err); }
+    }else{
+      why='no WebCodecs in this browser';
+    }
+
+    /* Last resort: record the canvas in real time. Safari will hand back an
+       MP4 here; everything else gives WebM. */
+    if(!out){
+      animProg('Falling back to a recording…');
+      out=await recordCanvas(cv,ctx,W,H,box,frames,fps);
+      out.fallback=true;
+    }
+
+    dl(out.blob, fname()+'.'+out.ext);
+    msg=out.ext.toUpperCase()+' saved ('+Math.round(out.blob.size/1024)+' KB)'
+      + (out.fallback&&why ? ' \u2014 '+why : '');
+  }catch(err){
+    console.error(err);
+    msg='MP4 export failed: '+(err.message||err);
+  }finally{
+    stack.length=0;
+    for(const e of saved) stack.push({id:e.id,type:e.type,on:e.on,baked:!!e.baked,open:true,p:Object.assign({},e.p)});
+    anim.rendering=false; cache.clear(); renderSidebar(); renderAnim(); render();
+    animProg(msg);          // re-render wiped the panel, so restate the outcome
+  }
+}
+
+/* Fallback for browsers without WebCodecs, or when the encoder refuses the
+   config: MediaRecorder on a canvas stream. Real-time only. */
+function recordCanvas(cv,ctx,W,H,box,frames,fps){
+  return new Promise((res,rej)=>{
+    if(!window.MediaRecorder || !cv.captureStream){ rej(new Error('no recorder support')); return; }
+    const stream=cv.captureStream(fps);
+    const types=['video/mp4;codecs=avc1.640034','video/mp4;codecs=avc1','video/mp4',
+                 'video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
+    const type=types.find(t=>MediaRecorder.isTypeSupported(t));
+    if(!type){ rej(new Error('no recorder support')); return; }
+    const ext=type.indexOf('mp4')>=0 ? 'mp4' : 'webm';
+    const rec=new MediaRecorder(stream,{mimeType:type, videoBitsPerSecond:6_000_000});
+    const parts=[];
+    rec.ondataavailable=e=>{ if(e.data.size) parts.push(e.data); };
+    rec.onerror=e=>rej(e.error||new Error('recorder failed'));
+    rec.onstop=()=>{
+      const blob=new Blob(parts,{type});
+      if(!blob.size) rej(new Error('recorder produced nothing'));
+      else res({blob, ext});
+    };
+    rec.start();
+    let i=0;
+    const tick=()=>{
+      if(i>=frames){ setTimeout(()=>rec.stop(), 1000/fps); return; }
+      animApply(anim.duration*i/frames);
+      drawFrame(ctx,W,H,box);
+      animProg('Recording '+Math.round(i/frames*100)+'%');
+      i++;
+      setTimeout(tick, 1000/fps);
+    };
+    tick();
+  });
+}
+
+/* ── Timeline UI ─────────────────────────────────────────────
+   A horizontal track under the text box, After Effects style: a ruler,
+   a lane of keyframe diamonds you can drag to retime, and a playhead you
+   can scrub. Transport and export controls sit in the bar above it.
+   ─────────────────────────────────────────────────────────── */
+
+const TL = {drag:null};        // {mode:'scrub'|'key', index}
+
+function tlTimeToPct(t){ return Math.max(0,Math.min(1, t/anim.duration))*100; }
+
+function tlRulerTicks(){
+  /* Aim for roughly one label every 90px; fall back on a sane step. */
+  const track=document.getElementById('tlInner') || document.getElementById('tlTrack');
+  const w=track ? track.getBoundingClientRect().width : 600;
+  const want=Math.max(2, Math.round(w/90));
+  const raw=anim.duration/want;
+  const steps=[0.1,0.25,0.5,1,2,5,10];
+  const step=steps.find(s=>s>=raw) || Math.ceil(raw);
+  let out='';
+  for(let t=0;t<=anim.duration+1e-6;t+=step){
+    const pct=tlTimeToPct(t);
+    /* The final label would hang off the right edge, so flip it inward. */
+    const last = pct>99.5;
+    out+=`<div class="tl-tick${last?' last':''}" style="left:${pct}%"><span>${
+      (Math.round(t*100)/100)}s</span></div>`;
+  }
+  return out;
+}
+
+function renderAnim(){
+  const el=document.getElementById('timeline');
+  if(!el) return;
+  el.classList.toggle('open', anim.open);
+  const btn=document.getElementById('montageBtn');
+  if(btn){
+    btn.classList.toggle('open', anim.open);
+
+  }
+  if(!anim.open){ el.innerHTML=''; return; }
+
+  const keys=anim.keys.map((k,i)=>
+    `<div class="tl-key ${i===anim.cur?'sel':''}" data-tl-key="${i}"
+          style="left:${tlTimeToPct(k.t)}%" title="${k.t.toFixed(2)}s \u2014 drag to retime"></div>`
+  ).join('');
+  const noKeys=anim.keys.length<2;
+
+  el.innerHTML=`
+    <div class="tl-top">
+      <span class="tl-title">montage</span>
+      <span class="tl-time">${anim.t.toFixed(2)} / ${(+anim.duration).toFixed(2)}s</span>
+      <span class="tl-spacer"></span>
+      <button class="tl-x" data-anim-act="close" title="Close">\u2715</button>
+    </div>
+
+    <div class="tl-bar">
+      <div class="tl-transport">
+        <button class="tl-btn primary" data-anim-act="play" ${noKeys?'disabled':''}
+          title="Play / stop (space)">${anim.playing?'\u25a0':'\u25b6'}</button>
+        <button class="tl-btn" data-anim-act="add"
+          title="Add a keyframe at the playhead">\u25c6&nbsp;+</button>
+        <button class="tl-btn" data-anim-act="del" ${anim.cur<0?'disabled':''}
+          title="Delete selected keyframe (del)">\u25c6&nbsp;\u2212</button>
+      </div>
+      <span class="tl-spacer"></span>
+      <div class="tl-fields">
+        <span class="tl-field"><span class="k">length</span>
+          <span class="numspin">
+            <input type="number" min="0.2" max="30" step="0.5" value="${anim.duration}" data-anim="duration">
+            <span class="spin"><button data-anim-nudge="duration" data-dir="0.5">\u25b2</button>
+            <button data-anim-nudge="duration" data-dir="-0.5">\u25bc</button></span>
+            <span class="unit">s</span>
+          </span></span>
+        <span class="tl-field"><span class="k">fps</span>
+          <select data-anim="fps">${[12,15,24,30,60].map(v=>
+            `<option value="${v}" ${v===anim.fps?'selected':''}>${v}</option>`).join('')}</select></span>
+        <span class="tl-field"><span class="k">ease</span>
+          <select data-anim="ease">${[['inout','in-out'],['linear','linear'],['in','in'],['out','out']]
+            .map(([v,l])=>`<option value="${v}" ${v===anim.ease?'selected':''}>${l}</option>`).join('')}</select></span>
+        <span class="tl-field"><span class="k">size</span>
+          <select data-anim="size">${[360,540,720,1080].map(v=>
+            `<option value="${v}" ${v===anim.size?'selected':''}>${v}px</option>`).join('')}</select></span>
+      </div>
+    </div>
+
+    <div class="tl-track" id="tlTrack">
+      <div class="tl-inner" id="tlInner">
+        <div class="tl-ruler">${tlRulerTicks()}</div>
+        <div class="tl-lane">
+          <div class="tl-guide"></div>
+          ${anim.keys.length>1?`<div class="tl-span" style="left:${
+            tlTimeToPct(anim.keys[0].t)}%;right:${100-tlTimeToPct(anim.keys[anim.keys.length-1].t)}%"></div>`:''}
+          ${keys}
+        </div>
+        <div class="tl-head" id="tlHead" style="left:${tlTimeToPct(anim.t)}%"></div>
+      </div>
+    </div>
+
+    <div class="tl-foot">
+      <span class="tl-prog" id="animProg"></span>
+      <span class="tl-spacer"></span>
+      <button class="tl-btn" data-anim-act="gif" ${noKeys||anim.rendering?'disabled':''}>export gif</button>
+      <button class="tl-btn" data-anim-act="mp4" ${noKeys||anim.rendering?'disabled':''}>export mp4</button>
+    </div>
+    ${anim.keys.length?'':'<p class="tl-hint">Set up a look, then hit \u25c6 + to drop your first keyframe. Change the effects and add another to animate between them.</p>'}`;
+}
+
+function renderAnimScrub(){
+  const head=document.getElementById('tlHead');
+  if(head) head.style.left=tlTimeToPct(anim.t)+'%';
+  const t=document.querySelector('.tl-time');
+  if(t) t.textContent=anim.t.toFixed(2)+' / '+(+anim.duration).toFixed(2)+'s';
+}
+function renderAnimButtons(){
+  const b=document.querySelector('[data-anim-act="play"]');
+  if(b){ b.textContent=anim.playing?'\u25a0':'\u25b6'; b.disabled=anim.keys.length<2; }
+  for(const act of ['gif','mp4']){
+    const x=document.querySelector(`[data-anim-act="${act}"]`);
+    if(x) x.disabled = anim.keys.length<2 || anim.rendering;
+  }
+  const dl=document.querySelector('[data-anim-act="del"]');
+  if(dl) dl.disabled = anim.cur<0;
+}
+
+/* Pointer x -> time on the track. */
+function tlTimeAt(clientX){
+  /* Measure the inset area: the track is padded so keyframes sitting on 0s
+     or on the last frame aren't sliced by the border. */
+  const tr=document.getElementById('tlInner');
+  if(!tr) return 0;
+  const r=tr.getBoundingClientRect();
+  return Math.max(0, Math.min(1, (clientX-r.left)/Math.max(1,r.width))) * anim.duration;
+}
+
+document.getElementById('montageBtn').onclick=()=>{
+  anim.open=!anim.open;
+  /* Opening on an empty timeline with a look already dialled in: seed the
+     first keyframe so there is something to animate from. */
+  if(anim.open && !anim.keys.length && stack.length) animAddKey(0);
+  else renderAnim();
+  if(!anim.open && anim.playing) animStop();
+  render();
+};
+
+const timelineEl=document.getElementById('timeline');
+
+timelineEl.addEventListener('pointerdown', ev=>{
+  const keyEl=ev.target.closest('[data-tl-key]');
+  const track=ev.target.closest('#tlTrack');
+  if(!keyEl && !track) return;
+  ev.preventDefault();
+  if(anim.playing) animStop();
+
+  if(keyEl){
+    /* Grab a keyframe: select it, jump there, and allow dragging to retime. */
+    const i=+keyEl.dataset.tlKey;
+    anim.cur=i;
+    const key=anim.keys[i];
+    animGoto(key.t);
+    TL.drag={mode:'key', key};
+  }else{
+    TL.drag={mode:'scrub'};
+    animGoto(tlTimeAt(ev.clientX), {quiet:true});
+    renderAnimScrub(); renderSidebar();
+  }
+  timelineEl.setPointerCapture(ev.pointerId);
+});
+
+timelineEl.addEventListener('pointermove', ev=>{
+  if(!TL.drag) return;
+  const t=tlTimeAt(ev.clientX);
+  if(TL.drag.mode==='scrub'){
+    animGoto(t, {quiet:true});
+    renderAnimScrub(); renderSidebar();
+  }else{
+    /* Retiming: move the key, keep the list sorted, follow it with the
+       playhead so you can see what you're dragging. Two keys landing on the
+       same instant would make a zero-length segment, so keep them apart. */
+    let nt=Math.max(0, Math.min(anim.duration, t));
+    const MIN=0.03;
+    for(const k of anim.keys){
+      if(k===TL.drag.key) continue;
+      if(Math.abs(k.t-nt)<MIN) nt = nt>=k.t ? k.t+MIN : k.t-MIN;
+    }
+    TL.drag.key.t=Math.max(0, Math.min(anim.duration, nt));
+    animSort();
+    anim.cur=anim.keys.indexOf(TL.drag.key);
+    anim.t=TL.drag.key.t;
+    animApply(anim.t); renderPreview();
+    renderAnim();
+  }
+});
+
+const tlEndDrag=ev=>{
+  if(!TL.drag) return;
+  TL.drag=null;
+  try{ timelineEl.releasePointerCapture(ev.pointerId); }catch(e){}
+  renderAnim(); renderSidebar(); render();
+};
+timelineEl.addEventListener('pointerup', tlEndDrag);
+timelineEl.addEventListener('pointercancel', tlEndDrag);
+
+timelineEl.addEventListener('click', ev=>{
+  let m;
+  if((m=ev.target.closest('[data-anim-nudge]'))){
+    anim.duration=Math.max(0.2,Math.min(30, anim.duration+(+m.dataset.dir)));
+    for(const k of anim.keys) k.t=Math.min(k.t, anim.duration);
+    renderAnim(); return;
+  }
+  if((m=ev.target.closest('[data-anim-act]'))){
+    const a=m.dataset.animAct;
+    if(a==='close'){ if(anim.playing) animStop(); anim.open=false; renderAnim(); render(); return; }
+    if(a==='add') animAddKey();
+    else if(a==='del'){ if(anim.cur>=0){ animDeleteKey(anim.cur); anim.cur=-1; renderAnim(); } }
+    else if(a==='play') anim.playing?animStop():animPlay();
+    else if(a==='gif') exportGIF();
+    else if(a==='mp4') exportMP4();
+    return;
+  }
+});
+
+timelineEl.addEventListener('input', ev=>{
+  const key=ev.target.dataset.anim;
+  if(!key) return;
+  if(key==='duration'){
+    anim.duration=Math.max(0.2,Math.min(30,+ev.target.value||3));
+    for(const k of anim.keys) k.t=Math.min(k.t, anim.duration);
+    renderAnim();
+  }
+  else if(key==='fps')  anim.fps=+ev.target.value;
+  else if(key==='size') anim.size=+ev.target.value;
+  else if(key==='ease') anim.ease=ev.target.value;
+});
+
+/* Delete removes the selected keyframe — but never while typing. */
+document.addEventListener('keydown', ev=>{
+  if(ev.key!=='Delete' && ev.key!=='Backspace') return;
+  const a=document.activeElement;
+  if(a && (a.tagName==='TEXTAREA' || a.tagName==='INPUT' || a.tagName==='SELECT')) return;
+  if(!anim.open || anim.cur<0 || anim.cur>=anim.keys.length) return;
+  ev.preventDefault();
+  animDeleteKey(anim.cur); anim.cur=-1; renderAnim();
+});
+/* Space toggles playback, again only outside a field. */
+document.addEventListener('keydown', ev=>{
+  if(ev.code!=='Space') return;
+  const a=document.activeElement;
+  if(a && (a.tagName==='TEXTAREA' || a.tagName==='INPUT' || a.tagName==='SELECT')) return;
+  if(!anim.open || anim.keys.length<2) return;
+  ev.preventDefault();
+  anim.playing?animStop():animPlay();
+});
+
+window.addEventListener('resize', ()=>{ if(anim.keys.length||true) renderAnim(); });
+
+/* ══════════════════════════════════════════════════════════════
+   8. SIDEBAR UI
+   ══════════════════════════════════════════════════════════════ */
+const esc=s=>String(s).replace(/"/g,'&quot;');
+const fmt=(v,step)=> (+v).toFixed(step<1?2:0);
+
+const ICON_CHEV_DOWN='<svg viewBox="0 0 12 12"><path d="M3 4.5 L6 8 L9 4.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const ICON_CHEV_UP  ='<svg viewBox="0 0 12 12"><path d="M3 7.5 L6 4 L9 7.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const ICON_TRASH    ='<svg viewBox="0 0 22.6 35.62" fill="currentColor"><path d="M.59,33.86c.02.98.82,1.76,1.8,1.76h17.82c.98,0,1.78-.78,1.8-1.76l.59-23.35H0l.59,23.35ZM15.59,16.85c0-1,.81-1.8,1.8-1.8s1.8.81,1.8,1.8v12.88c0,1-.81,1.8-1.8,1.8s-1.8-.81-1.8-1.8v-12.88ZM9.5,16.85c0-1,.81-1.8,1.8-1.8s1.8.81,1.8,1.8v12.88c0,1-.81,1.8-1.8,1.8s-1.8-.81-1.8-1.8v-12.88ZM3.41,16.85c0-1,.81-1.8,1.8-1.8s1.8.81,1.8,1.8v12.88c0,1-.81,1.8-1.8,1.8s-1.8-.81-1.8-1.8v-12.88Z"/><path d="M20.8,4.78h-3.43c-.41,0-.77-.27-.87-.67-.56-2.35-2.68-4.11-5.2-4.11s-4.64,1.76-5.2,4.11c-.09.4-.46.67-.87.67H1.8c-.99,0-1.8.81-1.8,1.8v2.13h22.6v-2.13c0-.99-.81-1.8-1.8-1.8ZM13.43,4.78h-4.25c-.33,0-.55-.34-.41-.64.45-.95,1.42-1.6,2.54-1.6s2.08.65,2.54,1.6c.14.29-.09.64-.41.64Z"/></svg>';
+const ICON_LOCK     ='<svg viewBox="0 0 12 12"><rect x="2.6" y="5.2" width="6.8" height="5.2" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.1"/><path d="M4.2 5.2 V3.9 A1.8 1.8 0 0 1 7.8 3.9 V5.2" fill="none" stroke="currentColor" stroke-width="1.1"/></svg>';
+const ICON_RESET    ='<svg viewBox="0 0 12 12"><path d="M9.6 3.6 A4 4 0 1 0 10.1 8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M10.2 1.9 L10.2 4 L8.1 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+function renderSidebar(){
+  renderPicker();
+  renderStack();
+  const btn=document.getElementById('effectsBtn');
+  btn.classList.toggle('open', pickerOpen);
+
+}
+
+function renderPicker(){
+  const p = document.getElementById('picker');
+  p.classList.toggle('open', pickerOpen);
+  if(!pickerOpen){ p.innerHTML=''; return; }
+  p.innerHTML = EFFECTS_ORDER.map(type=>
+    `<button class="picker-item" data-add="${type}">${esc(REGISTRY[type].label)}</button>`
+  ).join('');
+}
+
+function renderStack(){
+  const root = document.getElementById('stack');
+  root.innerHTML = stack.map(renderCard).join('');
+  for(const inst of stack) if(REGISTRY[inst.type].warp && !inst.baked) hookWarp(inst);
+
+  /* A new card lands at the foot of a list that may already be scrolled out of
+     sight, so adding an effect could look like nothing happened. Mark it and
+     bring it into view. The flag is consumed here, so the cue fires once on
+     add and not on every later redraw of the stack. */
+  if(freshId !== null){
+    const card = root.querySelector(`[data-card="${freshId}"]`);
+    freshId = null;
+    if(card){
+      /* Guarded: if matchMedia is missing this must not throw, or adding an
+         effect would half-fail after the card is already in the DOM. */
+      const still = !!(window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion:reduce)').matches);
+      requestAnimationFrame(()=>card.scrollIntoView(
+        {block:'nearest', behavior: still ? 'auto' : 'smooth'}));
+    }
+  }
+}
+
+function renderCard(inst){
+  const d = REGISTRY[inst.type];
+
+  if(inst.baked){
+    /* Frozen into the outlines. The card stays put so the recipe is still
+       readable, and the newest bake can be undone from here. */
+    /* One undo per bake, not one per frozen card: offer it on the last card
+       of the newest group, since undoing releases the whole group at once. */
+    const grp = bakes[inst.bakeIndex-1];
+    const newest = inst.bakeIndex === bakes.length &&
+                   grp && grp.ids[grp.ids.length-1] === inst.id;
+    return `<div class="card baked ${inst.open?'open':''}" data-card="${inst.id}">
+      <div class="card-head">
+        <span class="title">${esc(d.label)}</span>
+        <span class="lockmark" title="Baked into the outlines">${ICON_LOCK}</span>
+        <button class="icobtn" data-collapse="${inst.id}"
+          title="${inst.open?'Collapse':'Expand'}">${inst.open?ICON_CHEV_UP:ICON_CHEV_DOWN}</button>
+      </div>
+      <div class="card-body">
+        <p class="baked-note">Baked in when a second ${esc(inst.bakeReason||d.label)} was
+          added, so these settings can't be changed any more.</p>
+        ${newest
+          ? `<button class="undo-btn" data-unbake="1">Undo bake &mdash; make editable again</button>`
+          : (inst.bakeIndex === bakes.length
+              ? ''
+              : `<p class="baked-note dim">Undo the later bake first to reach this one.</p>`)}
+        <div class="frozen">${renderControls(inst)}</div>
+      </div>
+    </div>`;
+  }
+
+  // ON  → chevron (collapse / expand the parameters)
+  // OFF → trash    (remove the effect entirely)
+  const rightIcon = inst.on
+    ? `<button class="icobtn" data-collapse="${inst.id}" title="${inst.open?'Collapse':'Expand'}">${inst.open?ICON_CHEV_UP:ICON_CHEV_DOWN}</button>`
+    : `<button class="icobtn" data-remove="${inst.id}" title="Remove">${ICON_TRASH}</button>`;
+  return `<div class="card ${inst.open?'open':''}" data-card="${inst.id}">
+    <div class="card-head ${inst.on?'':'off'}">
+      <span class="title">${esc(d.label)}</span>
+      <span class="sw ${inst.on?'on':''}" data-toggle="${inst.id}"></span>
+      ${rightIcon}
+    </div>
+    <div class="card-body">${renderControls(inst)}</div>
+  </div>`;
+}
+
+function renderControls(inst){
+  if(!inst) return '';
+  const d = REGISTRY[inst.type], type = inst.id;
+  let h='';
+  for(const c of d.controls){
+    if(c.type==='file'){
+      const nm=inst.p.customName;
+      h+=`<label class="filebtn" data-file="${type}">${nm?'↻ '+esc(nm):esc(c.label)}</label>
+          <input type="file" accept=".svg,image/*" data-fileinput="${type}" hidden>`;
+    }
+    else if(c.type==='warp'){
+      h+=renderWarp(inst.id);
+    }
+    else if(c.type==='numinput'){
+      h+=`<div class="opt numinput-row">
+        <span class="lbl">${c.label}</span>
+        <div class="numspin">
+          <input type="number" min="${c.min}" max="${c.max}" step="${c.step}" value="${inst.p[c.key]}"
+                 data-num="${type}" data-key="${c.key}">
+          <div class="spin">
+            <button data-numnudge="${type}" data-key="${c.key}" data-dir="1">▲</button>
+            <button data-numnudge="${type}" data-key="${c.key}" data-dir="-1">▼</button>
+          </div>
+          <span class="unit">${(c.unit||'').trim()}</span>
+        </div>
+      </div>`;
+    }
+    else if(c.type==='seg'){
+      h+=`<div class="opt"><div class="opt-label">${c.label}</div><div class="seg">`+
+        c.opts.map(([v,l])=>`<button data-seg="${type}" data-key="${c.key}" data-val="${v}" class="${inst.p[c.key]===v?'on':''}">${l}</button>`).join('')+
+        `</div></div>`;
+    }
+    else {
+      const v=inst.p[c.key];
+      h+=`<div class="opt"><label>${c.label}<span data-val-of="${type}:${c.key}">${fmt(v,c.step)}${c.unit||''}</span></label>
+          <input type="range" min="${c.min}" max="${c.max}" step="${c.step}" value="${v}"
+                 data-range="${type}" data-key="${c.key}" data-unit="${c.unit||''}"></div>`;
+    }
+  }
+  return h;
+}
+
+/* ── Distort widget: drag the 4 corners to warp the pixel shape ── */
+const WARP_HALF = 42;   // half-size of the unit square in widget viewBox units
+/* Wide enough that the rotate handle, which sits on a stem outside the box,
+   is not clipped by the edge of the widget. */
+const WARP_VB   = 132;
+
+
+function renderWarp(type){
+  let dots='';
+  const N=7, span=40;
+  for(let j=0;j<N;j++) for(let i=0;i<N;i++){
+    const x=-span+i*(span*2/(N-1)), y=-span+j*(span*2/(N-1));
+    dots+=`<circle class="grid-dot" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="0.9"/>`;
+  }
+  let handles='';
+  for(const c of WARP_KEYS){
+    /* Corners are square (free distort), sides are round (axis scale) —
+       the shape tells you what the handle will do. */
+    const side = WARP_SIDES.includes(c);
+    handles+=`<rect class="warp-handle ${side?'edge':'corner'}" data-warp-corner="${c}"`+
+             ` x="0" y="0" width="9" height="9" rx="${side?4.5:1.5}"/>`;
+  }
+  return `<div class="warp" data-warp-widget="${type}">
+    <div class="warp-head">
+      <span class="warp-title">distort</span>
+      <span class="warp-readout" data-warp-readout="${type}"></span>
+      <button class="warp-reset" data-warp-reset="${type}" title="Reset">${ICON_RESET}</button>
+    </div>
+    <svg class="warp-svg" viewBox="${-WARP_VB/2} ${-WARP_VB/2} ${WARP_VB} ${WARP_VB}">${dots}
+      <path class="warp-edge" d=""/>
+      <path class="warp-shape" d=""/>
+      <line class="warp-rot-stem" x1="0" y1="0" x2="0" y2="0"/>
+      ${handles}
+      <circle class="warp-handle rot" data-warp-corner="rot" cx="0" cy="0" r="5"/>
+    </svg>
+    <p class="warp-hint">sides scale · corners distort · alt = from centre</p>
+  </div>`;
+}
+
+/* The letter shown inside the pixel distort box when warpProxy is set.
+   Falls back to a plain square when nothing is loaded yet. */
+let _proxyShape=null, _proxyKey='';
+function warpProxyShape(){
+  const key = artwork ? 'svg:'+artwork.name : (ready ? 'font:'+upm+':'+(font.numGlyphs||0) : '');
+  if(key && key===_proxyKey && _proxyShape) return _proxyShape;
+  let cs=null;
+  try{
+    if(artwork) cs=artwork.contours;
+    else if(ready) cs=flatten(font.charToGlyph('A').path.commands, upm/60);
+  }catch(e){}
+  _proxyKey=key;
+  _proxyShape = (cs && cs.length) ? normalize(cs) : [SHAPES.square];
+  return _proxyShape;
+}
+
+/* Convert a pointer event into shape-space coordinates (y up, unit box). */
+function warpPointer(ev, svg){
+  const r = svg.getBoundingClientRect();
+  const S = WARP_HALF*2;
+  const vx = ((ev.clientX-r.left)/r.width  - 0.5)*WARP_VB;
+  const vy = ((ev.clientY-r.top) /r.height - 0.5)*WARP_VB;
+  return {x: vx/S, y: -vy/S};        // SVG y is down, shape y is up
+}
+
+function updateWarpVisual(inst){
+  const el = document.querySelector(`.warp[data-warp-widget="${inst.id}"]`);
+  if(!el) return;
+  const svg = el.querySelector('svg.warp-svg');   // NOT just 'svg': the reset
+  if(!svg) return;                                // button holds an icon svg too
+  /* When warpProxy is set, the widget previews a letter — the actual
+     'A' of the loaded font, or the SVG source when there is one. */
+  const shapes = REGISTRY[inst.type].warpProxy ? warpProxyShape()
+    : (inst.p.shape==='custom' && inst.p.custom
+        ? inst.p.custom : [SHAPES[inst.p.shape]||SHAPES.square]);
+  const w = warpOf(inst.p);
+  const S = WARP_HALF*2;
+  const toSvg = p => `${(p.x*S).toFixed(1)} ${(-p.y*S).toFixed(1)}`;
+
+  let d='';
+  for(const sh of shapes) d += 'M'+warpShape(sh, w).map(toSvg).join('L')+'Z';
+  svg.querySelector('.warp-shape').setAttribute('d', d);
+
+  /* Dashed outline of the transform box — shows what the handles are doing
+     even when the pixel shape inside is small. */
+  const cell = warpShape([{x:-.5,y:-.5},{x:.5,y:-.5},{x:.5,y:.5},{x:-.5,y:.5}], w);
+  svg.querySelector('.warp-edge').setAttribute('d','M'+cell.map(toSvg).join('L')+'Z');
+
+  const pts = warpHandlePoints(w);
+  for(const c of WARP_KEYS){
+    const p = pts[c];
+    const h = svg.querySelector(`[data-warp-corner="${c}"]`);
+    h.setAttribute('x', (p.x*S-4.5).toFixed(2));
+    h.setAttribute('y', (-p.y*S-4.5).toFixed(2));
+  }
+  /* Rotate handle: sits outside the top edge, on a short stem, and turns
+     with the box — the usual place to grab a rotation. */
+  const th=w.rot*Math.PI/180;
+  const up={x:-Math.sin(th), y:Math.cos(th)};
+  const top=pts.tm;
+  const rp={x: top.x + up.x*0.17, y: top.y + up.y*0.17};
+  const rot=svg.querySelector('[data-warp-corner="rot"]');
+  rot.setAttribute('cx',(rp.x*S).toFixed(2));
+  rot.setAttribute('cy',(-rp.y*S).toFixed(2));
+  const stem=svg.querySelector('.warp-rot-stem');
+  stem.setAttribute('x1',(top.x*S).toFixed(2)); stem.setAttribute('y1',(-top.y*S).toFixed(2));
+  stem.setAttribute('x2',(rp.x*S).toFixed(2));  stem.setAttribute('y2',(-rp.y*S).toFixed(2));
+
+  const out=el.querySelector('[data-warp-readout]');
+  if(out){
+    const parts=[];
+    if(w.sx!==1||w.sy!==1) parts.push(Math.round(w.sx*100)+'% × '+Math.round(w.sy*100)+'%');
+    if(w.rot) parts.push(Math.round(w.rot)+'°');
+    out.textContent=parts.join('  ');
+  }
+}
+
+function hookWarp(inst){
+  const el = document.querySelector(`.warp[data-warp-widget="${inst.id}"]`);
+  if(!el) return;
+  updateWarpVisual(inst);
+  const svg = el.querySelector('svg.warp-svg');
+  if(!svg) return;
+  const CLAMP=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+  svg.querySelectorAll('.warp-handle').forEach(h=>{
+    h.addEventListener('pointerdown', ev=>{
+      ev.preventDefault(); ev.stopPropagation();
+      try{ h.setPointerCapture(ev.pointerId); }catch(e){}
+      h.classList.add('dragging');
+      const which = h.dataset.warpCorner;
+
+      const move = mv=>{
+        const P = warpPointer(mv, svg);
+        const w = warpOf(inst.p);
+        const alt = mv.altKey;
+
+        if(which==='rot'){
+          /* Angle from the box centre; the handle starts pointing up, so
+             subtract 90°. Shift snaps to 15°, as most editors do. */
+          let a = Math.atan2(P.y-w.ty, P.x-w.tx)*180/Math.PI - 90;
+          if(mv.shiftKey) a = Math.round(a/15)*15;
+          while(a<0) a+=360; while(a>=360) a-=360;
+          inst.p.warpROT = a;
+        }
+        else if(WARP_SIDES.includes(which)){
+          /* Illustrator bounding-box behaviour: scale along ONE axis, with
+             the OPPOSITE side held still. Alt scales about the centre.
+             Both handles of that axis move, because the whole shape scales —
+             they are two ends of one control, not two free points. */
+          const u = warpUnproject(P, w);
+          if(which==='lm' || which==='rm'){
+            const edge = u.ux;                       // where the dragged side lands
+            if(alt){
+              const s = Math.abs(edge - w.tx)/0.5;
+              inst.p.warpSX = CLAMP(s, 0.05, 3);
+            } else {
+              const anchor = (which==='rm' ? -0.5 : 0.5)*w.sx + w.tx;   // opposite side
+              const s = (which==='rm' ? edge-anchor : anchor-edge);
+              inst.p.warpSX = CLAMP(s, 0.05, 3);
+              inst.p.warpTX = (edge+anchor)/2;
+            }
+          } else {
+            const edge = u.uy;
+            if(alt){
+              const s = Math.abs(edge - w.ty)/0.5;
+              inst.p.warpSY = CLAMP(s, 0.05, 3);
+            } else {
+              const anchor = (which==='tm' ? -0.5 : 0.5)*w.sy + w.ty;
+              const s = (which==='tm' ? edge-anchor : anchor-edge);
+              inst.p.warpSY = CLAMP(s, 0.05, 3);
+              inst.p.warpTY = (edge+anchor)/2;
+            }
+          }
+        }
+        else {
+          /* Corners stay free: each one moves on its own so you can distort
+             the cell into any quad. Undo the scale/rotation first so the
+             corner follows the cursor even on a transformed box. */
+          const u = warpUnproject(P, w);
+          const def = {tl:[-0.5,0.5], tr:[0.5,0.5], br:[0.5,-0.5], bl:[-0.5,-0.5]}[which];
+          const K = which.toUpperCase();
+          inst.p['warp'+K+'x'] = CLAMP(u.x-def[0], -1.2, 1.2);
+          inst.p['warp'+K+'y'] = CLAMP(u.y-def[1], -1.2, 1.2);
+        }
+        updateWarpVisual(inst);
+        invalidate();
+      };
+      const up = ()=>{
+        h.classList.remove('dragging');
+        h.removeEventListener('pointermove', move);
+        h.removeEventListener('pointerup', up);
+        h.removeEventListener('pointercancel', up);
+      };
+      h.addEventListener('pointermove', move);
+      h.addEventListener('pointerup', up);
+      h.addEventListener('pointercancel', up);
+    });
+  });
+}
+
+function resetWarp(id){
+  const inst = byId(id); if(!inst || inst.baked) return;
+  for(const k of WARP_CORNERS){ const K=k.toUpperCase();
+    inst.p['warp'+K+'x']=0; inst.p['warp'+K+'y']=0; }
+  inst.p.warpSX=1; inst.p.warpSY=1; inst.p.warpTX=0; inst.p.warpTY=0; inst.p.warpROT=0;
+  updateWarpVisual(inst); invalidate();
+}
+
+/* ══════════════════════════════════════════════════════════════
+   9. EVENTS
+   ══════════════════════════════════════════════════════════════ */
+document.getElementById('effectsBtn').onclick = ()=>{ pickerOpen=!pickerOpen; renderSidebar(); };
+document.getElementById('picker').addEventListener('click', ev=>{
+  const b = ev.target.closest('[data-add]');
+  if(!b) return;
+  addEffect(b.dataset.add);
+});
+
+const stackEl = document.getElementById('stack');
+stackEl.addEventListener('click', ev=>{
+  const t=ev.target; let m;
+  if((m=t.closest('[data-unbake]')))     { unbake(); return; }
+  if((m=t.closest('[data-warp-reset]'))) { resetWarp(+m.dataset.warpReset); return; }
+  if((m=t.closest('[data-numnudge]')))   {
+    const e=byId(+m.dataset.numnudge); if(!e || e.baked) return;
+    const ctl=REGISTRY[e.type].controls.find(c=>c.key===m.dataset.key);
+    const v=Math.max(ctl.min, Math.min(ctl.max, (+e.p[m.dataset.key]||0)+(+m.dataset.dir)*ctl.step));
+    e.p[m.dataset.key]=v;
+    const inp=stackEl.querySelector(`[data-num="${e.id}"][data-key="${m.dataset.key}"]`);
+    if(inp) inp.value=v;
+    invalidate(); return;
+  }
+  if((m=t.closest('[data-toggle]')))   { toggleEffect(+m.dataset.toggle); return; }
+  if((m=t.closest('[data-collapse]'))) { toggleEffectOpen(+m.dataset.collapse); return; }
+  if((m=t.closest('[data-remove]')))   { removeEffect(+m.dataset.remove); return; }
+  if((m=t.closest('[data-seg]')))      {
+    const e=byId(+m.dataset.seg); if(!e || e.baked) return;
+    e.p[m.dataset.key]=m.dataset.val;
+    /* Repaint just this group. A full renderSidebar() here would rebuild every
+       card in the chain, replaying each open card's reveal animation — so
+       picking an option made the whole panel jump. No seg option changes which
+       controls exist, only which one is lit, so the DOM can stay put. */
+    m.parentElement.querySelectorAll('[data-seg]').forEach(b=>
+      b.classList.toggle('on', b.dataset.val===m.dataset.val));
+    /* The distort preview draws the current shape, so it does need a nudge. */
+    if(REGISTRY[e.type].warp) updateWarpVisual(e);
+    invalidate(); return;
+  }
+  if((m=t.closest('[data-file]')))     {
+    stackEl.querySelector(`[data-fileinput="${m.dataset.file}"]`).click(); return;
+  }
+});
+stackEl.addEventListener('input', ev=>{
+  let r;
+  if((r=ev.target.closest('[data-range]'))){
+    const e=byId(+r.dataset.range); if(!e || e.baked) return;
+    e.p[r.dataset.key]=+r.value;
+    const lbl=stackEl.querySelector(`[data-val-of="${r.dataset.range}:${r.dataset.key}"]`);
+    if(lbl) lbl.textContent=fmt(+r.value,+r.step)+(r.dataset.unit||'');
+    invalidate();
+    return;
+  }
+  if((r=ev.target.closest('[data-num]'))){
+    const e=byId(+r.dataset.num); if(!e || e.baked) return;
+    const ctl=REGISTRY[e.type].controls.find(c=>c.key===r.dataset.key);
+    e.p[r.dataset.key]=Math.max(ctl.min, Math.min(ctl.max, +r.value||0));
+    invalidate();
+    return;
+  }
+});
+stackEl.addEventListener('change', ev=>{
+  const f=ev.target.closest('[data-fileinput]'); if(!f||!f.files[0]) return;
+  const e=byId(+f.dataset.fileinput); if(!e || e.baked) return;
+  loadCustom(f.files[0], e);
+});
+
+document.addEventListener('click', ev=>{
+  if(!pickerOpen) return;
+  if(!document.querySelector('.side').contains(ev.target)){ pickerOpen=false; renderSidebar(); }
+});
+
+/* Control bar */
+/* ── Colour picker ────────────────────────────────────────────
+   Sliders rather than a colour wheel: this is a two-colour tool, and a
+   channel you can read and type is more useful than a gamut you have to
+   aim at. RGB or CMYK, with the hex spelled out underneath. */
+const cpick = {open:false, which:null, mode:'rgb'};
+
+const hex2rgb = s => {
+  const m=/^#?([0-9a-f]{6})$/i.exec((s||'').trim());
+  if(!m) return null;
+  const n=parseInt(m[1],16);
+  return [n>>16 & 255, n>>8 & 255, n & 255];
+};
+const rgb2hex = r => '#'+r.map(v=>Math.max(0,Math.min(255,Math.round(v)))
+  .toString(16).padStart(2,'0')).join('');
+function rgb2cmyk([r,g,b]){
+  const R=r/255, G=g/255, B=b/255;
+  const k=1-Math.max(R,G,B);
+  if(k>=1) return [0,0,0,100];
+  return [ (1-R-k)/(1-k)*100, (1-G-k)/(1-k)*100, (1-B-k)/(1-k)*100, k*100 ];
+}
+function cmyk2rgb([c,m,y,k]){
+  const C=c/100, M=m/100, Y=y/100, K=k/100;
+  return [255*(1-C)*(1-K), 255*(1-M)*(1-K), 255*(1-Y)*(1-K)];
+}
+const cpickValue = () => (cpick.which==='ink'
+  ? (cfg.colorInk || '#000000')
+  : (cfg.colorBg  || '#ffffff'));
+
+/* Commit a colour.
+
+   The popover is NEVER rebuilt from here. Re-running renderCpick() on every
+   'input' event tore out the very range input under the cursor: the element
+   was detached mid-drag, pointer capture went with it, and the slider sprang
+   back to its old value — which is why no colour ever reached the artwork.
+   So the readouts are patched in place, and the full rebuild is reserved for
+   opening the popover and switching RVB/CMJN.
+
+   `origin` names the control the value came from, and that control is the one
+   thing left untouched — you don't rewrite the field someone is typing in. */
+function cpickSet(hex, origin){
+  if(cpick.which==='ink'){
+    cfg.colorInk=hex;
+    document.getElementById('text').style.caretColor=hex;
+  } else {
+    cfg.colorBg=hex;
+  }
+  syncSwatches();
+  cpickSyncFields(origin);
+  render();
+}
+
+/* Both chips in the control bar, from the resolved colours. */
+function syncSwatches(){
+  const ink=document.getElementById('swInk');
+  const bg =document.getElementById('swBg');
+  if(ink) ink.style.background = cfg.colorInk || themeInk();
+  if(bg){
+    bg.style.background = cfg.colorBg || '';
+    bg.classList.toggle('checker', !cfg.colorBg);
+  }
+}
+
+/* Patch the open popover's readouts to match cfg, leaving `origin` alone. */
+function cpickSyncFields(origin){
+  const el=document.getElementById('cpick');
+  if(!el || !cpick.open) return;
+  const hex=cpickValue(), rgb=hex2rgb(hex)||[0,0,0];
+  const prev=el.querySelector('.cp-preview');
+  if(prev){
+    const clear = cpick.which==='bg' && !cfg.colorBg;
+    prev.classList.toggle('checker', clear);
+    prev.style.background = clear ? '' : hex;
+  }
+
+  if(origin!=='hex'){
+    const f=el.querySelector('[data-cphex]');
+    if(f && f!==document.activeElement) f.value=hex.replace('#','');
+  }
+  if(origin!=='chan'){
+    const vals = cpick.mode==='rgb' ? rgb : rgb2cmyk(rgb);
+    el.querySelectorAll('[data-cpchan]').forEach((inp,i)=>{
+      if(vals[i]===undefined) return;
+      inp.value=Math.round(vals[i]);
+      const out=inp.parentElement.querySelector('.v');
+      if(out) out.textContent=Math.round(vals[i]);
+    });
+  } else {
+    /* Dragging: the slider owns its own position, only the number moves. */
+    el.querySelectorAll('[data-cpchan]').forEach(inp=>{
+      const out=inp.parentElement.querySelector('.v');
+      if(out) out.textContent=Math.round(+inp.value);
+    });
+  }
+}
+
+/* Full rebuild — only on open and on RVB/CMJN switch. Anything that fires
+   while a control is in use goes through cpickSyncFields() instead. */
+function renderCpick(){
+  const el=document.getElementById('cpick');
+  if(!el) return;
+  el.classList.toggle('open', cpick.open);
+  if(!cpick.open){ el.innerHTML=''; return; }
+  const hex=cpickValue(), rgb=hex2rgb(hex)||[0,0,0];
+  /* A null background is not "white", it is no background at all — show the
+     checker rather than a colour the export would then have to invent. */
+  const clear = cpick.which==='bg' && !cfg.colorBg;
+  const chans = cpick.mode==='rgb'
+    ? [['R',rgb[0],255],['G',rgb[1],255],['B',rgb[2],255]]
+    : rgb2cmyk(rgb).map((v,i)=>[['C','M','J','N'][i], v, 100]);
+  el.innerHTML=`
+    <div class="cp-top">
+      <span class="cp-name">${cpick.which==='ink'?'font':'background'}</span>
+      <span class="cp-preview${clear?' checker':''}"${clear?'':` style="background:${hex}"`}></span>
+    </div>
+    <div class="seg">
+      <button data-cpmode="rgb" class="${cpick.mode==='rgb'?'on':''}">RVB</button>
+      <button data-cpmode="cmyk" class="${cpick.mode==='cmyk'?'on':''}">CMJN</button>
+    </div>
+    ${chans.map((c,i)=>`<div class="cp-row">
+        <span class="k">${c[0]}</span>
+        <input type="range" min="0" max="${c[2]}" step="1" value="${Math.round(c[1])}"
+               data-cpchan="${i}">
+        <span class="v">${Math.round(c[1])}</span>
+      </div>`).join('')}
+    <label class="cp-hex"><span>#</span>
+      <input type="text" maxlength="7" value="${hex.replace('#','')}" data-cphex></label>
+    ${cpick.which==='bg'?`<div class="seg cp-alpha">
+      <button data-cpalpha class="${clear?'on':''}">transparent</button></div>`:''}`;
+}
+
+function openCpick(which){
+  if(cpick.open && cpick.which===which){ cpick.open=false; renderCpick(); return; }
+  cpick.which=which; cpick.open=true;
+  const anchor=document.getElementById(which==='ink'?'swInk':'swBg');
+  const el=document.getElementById('cpick');
+  const ar=anchor.getBoundingClientRect();
+  /* Position fixed: below the swatch, clamped to viewport */
+  const top = ar.bottom + 8;
+  const left = Math.max(6, Math.min(ar.left - 14, window.innerWidth - 230));
+  el.style.top = top + 'px';
+  el.style.left = left + 'px';
+  renderCpick();
+}
+
+document.querySelector('.ctrl').addEventListener('click', ev=>{
+  const sw=ev.target.closest('[data-swatch]');
+  if(sw){ ev.stopPropagation(); openCpick(sw.dataset.swatch); }
+});
+/* Everything inside the popover is handled here and stops there. Letting a
+   click bubble on would reach the close-on-outside-click handler after this
+   rebuilt the contents — and a detached target reads as "outside", which
+   closed the picker the moment you switched mode. */
+document.getElementById('cpick').addEventListener('click', ev=>{
+  ev.stopPropagation();
+  const m=ev.target.closest('[data-cpmode]');
+  if(m && m.dataset.cpmode!==cpick.mode){ cpick.mode=m.dataset.cpmode; renderCpick(); return; }
+  /* Transparency was a one-way door: cfg.colorBg starts null, and the moment
+     you touched a slider there was no way back to it — so a transparent GIF
+     was unreachable after any background edit. */
+  if(ev.target.closest('[data-cpalpha]')){
+    cfg.colorBg = cfg.colorBg ? null : '#ffffff';
+    syncSwatches(); renderCpick(); render();
+  }
+});
+document.getElementById('cpick').addEventListener('input', ev=>{
+  const el=document.getElementById('cpick');
+  const ch=ev.target.closest('[data-cpchan]');
+  if(ch){
+    const vals=[...el.querySelectorAll('[data-cpchan]')].map(x=>+x.value);
+    const rgb = cpick.mode==='rgb' ? vals : cmyk2rgb(vals);
+    cpickSet(rgb2hex(rgb), 'chan');
+    return;
+  }
+  const hx=ev.target.closest('[data-cphex]');
+  if(hx){
+    /* Only commit once six digits are actually there, so half-typed values
+       don't repaint the artwork on every keystroke. */
+    const rgb=hex2rgb(hx.value);
+    if(rgb) cpickSet(rgb2hex(rgb), 'hex');
+  }
+});
+document.addEventListener('click', ev=>{
+  if(!cpick.open) return;
+  if(ev.target.closest('#cpick') || ev.target.closest('[data-swatch]')) return;
+  cpick.open=false; renderCpick();
+});
+document.getElementById('alignGroup').addEventListener('click', ev=>{
+  const b=ev.target.closest('[data-align]'); if(!b) return;
+  cfg.align=b.dataset.align;
+  document.querySelectorAll('#alignGroup button').forEach(x=>x.classList.toggle('on', x===b));
+  syncEditor(); render();
+});
+document.getElementById('tracking').addEventListener('input', ev=>{
+  cfg.tracking=+ev.target.value||0; syncEditor(); render();
+});
+document.querySelectorAll('[data-nudge]').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    const input=document.getElementById(btn.dataset.nudge);
+    input.value=(+input.value)+(+btn.dataset.dir);
+    input.dispatchEvent(new Event('input'));
+  });
+});
+
+/* ── Text box ── */
+const textArea=document.getElementById('text');
+const clearBtn=document.getElementById('clearBtn');
+function syncClear(){ clearBtn.classList.toggle('on', textArea.value.length>0); }
+textArea.addEventListener('input', ()=>{ renderPreview(); syncClear(); });
+/* The SVG has no scrollbar of its own — it follows the textarea's. */
+textArea.addEventListener('scroll', renderPreview);
+/* Moving the caret can scroll the box without firing 'input'. */
+textArea.addEventListener('keyup', renderPreview);
+textArea.addEventListener('click', renderPreview);
+clearBtn.addEventListener('click', ev=>{
+  ev.stopPropagation();
+  textArea.value=''; textArea.focus(); renderPreview(); syncClear();
+});
+document.getElementById('canvasbox').addEventListener('mousedown', ev=>{
+  if(ev.target===clearBtn) return;
+  // Let the browser place the caret itself when clicking the textarea;
+  // only force focus when the click lands on the SVG or the box padding.
+  if(ev.target!==textArea){ ev.preventDefault(); textArea.focus(); }
+});
+
+const sizeInput=document.getElementById('size');
+sizeInput.addEventListener('input', ()=>{ syncEditor(); render(); });
+
+document.getElementById('svgBtn').onclick=exportSVG;
+document.getElementById('otfBtn').onclick=exportOTF;
+document.getElementById('loadBtn').onclick=()=>document.getElementById('fontFile').click();
+document.getElementById('loadSvgBtn').onclick=()=>document.getElementById('svgFile').click();
+document.getElementById('svgFile').addEventListener('change', e=>{
+  const f=e.target.files[0]; if(!f) return;
+  f.text().then(t=>setArtwork(svgTextToContours(t), f.name))
+          .catch(()=>setNote('SVG unreadable.'));
+  e.target.value='';
+});
+document.getElementById('svgChip').addEventListener('click', ()=>clearArtwork());
+document.getElementById('fontFile').addEventListener('change', e=>{
+  const f=e.target.files[0]; if(!f) return;
+  f.arrayBuffer().then(buf=>setFont(opentype.parse(buf), f.name)).catch(()=>setNote('Font unreadable.'));
+});
+window.addEventListener('resize', ()=>{ syncEditor(); renderPreview(); });
+
+const setNote = t => document.getElementById('railnote').textContent = t;
+const setFontLabel = t => { const el=document.getElementById('fontLabel'); if(el) el.textContent=t; };
+
+function injectFontFace(f){
+  try{
+    const bytes=new Uint8Array(f.toArrayBuffer());
+    let binary='';
+    const CH=0x8000;
+    for(let i=0;i<bytes.length;i+=CH) binary+=String.fromCharCode.apply(null, bytes.subarray(i,i+CH));
+    const b64=btoa(binary);
+    const old=document.getElementById('injectedFont'); if(old) old.remove();
+    const style=document.createElement('style');
+    style.id='injectedFont';
+    style.textContent=`@font-face{font-family:'glyphlab-font';src:url(data:font/otf;base64,${b64}) format('opentype');font-display:block;}`;
+    document.head.appendChild(style);
+  }catch(e){}
+}
+
+let fontName='—';
+function setFont(f, label){
+  clearArtwork(true);
+  font=f; upm=f.unitsPerEm||1000; ready=true; baseOverride=null; fontName=label;
+  rebuildCharset();
+  setNote('Ready'); setFontLabel(label);
+  injectFontFace(f);
+  const gc=document.getElementById('glyphCount');
+  if(gc) gc.textContent=(f.numGlyphs||'—')+' glyphs';
+  syncEditor();
+  cache.clear(); renderNow();}
+
+function loadCustom(file, e){
+  const R=new FileReader();
+  const done = cs => {
+    if(!cs||!cs.length){ setNote('Shape unreadable.'); return; }
+    e.p.custom=normalize(cs); e.p.customName=file.name; e.p.shape='custom';
+    renderSidebar(); invalidate();
+  };
+  if(/svg/i.test(file.type)||/\.svg$/i.test(file.name)){
+    R.onload=()=>done(svgTextToContours(R.result));
+    R.readAsText(file);
+  } else {
+    R.onload=()=>{ const im=new Image(); im.onload=()=>{
+      const N=110, s=Math.min(N/im.width,N/im.height), w=Math.max(2,Math.round(im.width*s)), h=Math.max(2,Math.round(im.height*s));
+      const cc=document.createElement('canvas'); cc.width=w+4; cc.height=h+4;
+      const xx=cc.getContext('2d',{colorSpace:'srgb', willReadFrequently:true});
+      xx.drawImage(im,2,2,w,h);
+      const dd=xx.getImageData(0,0,cc.width,cc.height).data, f=new Float32Array(cc.width*cc.height);
+      for(let i=0;i<f.length;i++){ const a=dd[i*4+3]/255, lum=1-(dd[i*4]*0.299+dd[i*4+1]*0.587+dd[i*4+2]*0.114)/255; f[i]=a<0.5?0:lum; }
+      const F={f,w:cc.width,h:cc.height,cell:1,x0:0,y0:0,ytop:cc.height}; boxBlur(F,1);
+      done(marching(F,0.5).map(c=>simplify(c,0.55)).filter(c=>c.length>3)); };
+      im.src=R.result; };
+    R.readAsDataURL(file);
+  }
+}
+
+/* ── Scroll indicator ───────────────────────────────────────────
+   A pill tracking a scroller, drawn in the same ink as everything
+   else. Fixed-positioned so it never disturbs the layout it sits on. */
+function scrollBar(el){
+  const bar=document.createElement('div'); bar.className='sbar';
+  const thumb=document.createElement('div'); thumb.className='sbar-thumb';
+  bar.appendChild(thumb); document.body.appendChild(bar);
+  let hide, drag=null, queued=false;
+
+  const place=()=>{
+    queued=false;
+    const r=el.getBoundingClientRect();
+    const travel=el.scrollHeight-el.clientHeight;
+    if(travel<2 || r.height<48){ bar.style.display='none'; return; }
+    bar.style.display='block';
+    const h=r.height-10;
+    bar.style.top=(r.top+5)+'px'; bar.style.left=(r.right-10)+'px'; bar.style.height=h+'px';
+    const th=Math.max(26, h*(el.clientHeight/el.scrollHeight));
+    thumb.style.height=th+'px';
+    thumb.style.transform='translateY('+((el.scrollTop/travel)*(h-th))+'px)';
+  };
+  const update=()=>{ if(!queued){ queued=true; requestAnimationFrame(place); } };
+  const show=()=>{ bar.classList.add('on'); clearTimeout(hide); };
+  const fade=ms=>{ clearTimeout(hide); hide=setTimeout(()=>{ if(!drag) bar.classList.remove('on'); }, ms); };
+
+  el.addEventListener('scroll', ()=>{ update(); show(); fade(900); }, {passive:true});
+  el.addEventListener('pointerenter', ()=>{ update(); show(); });
+  el.addEventListener('pointerleave', ()=> fade(350));
+  bar.addEventListener('pointerenter', show);
+  bar.addEventListener('pointerleave', ()=> fade(350));
+
+  thumb.addEventListener('pointerdown', ev=>{
+    ev.preventDefault();
+    const h=bar.getBoundingClientRect().height, th=thumb.getBoundingClientRect().height;
+    drag={y:ev.clientY, top:el.scrollTop,
+          k:(el.scrollHeight-el.clientHeight)/Math.max(1,h-th)};
+    thumb.classList.add('drag'); thumb.setPointerCapture(ev.pointerId); show();
+  });
+  thumb.addEventListener('pointermove', ev=>{
+    if(!drag) return;
+    el.scrollTop = drag.top + (ev.clientY-drag.y)*drag.k;
+  });
+  const stop=()=>{ if(!drag) return; drag=null; thumb.classList.remove('drag'); fade(700); };
+  thumb.addEventListener('pointerup', stop);
+  thumb.addEventListener('pointercancel', stop);
+
+  new ResizeObserver(update).observe(el);
+  new MutationObserver(update).observe(el,{childList:true,subtree:true,attributes:true});
+  window.addEventListener('resize', update);
+  update();
+}
+document.querySelectorAll('.main,.fxscroll').forEach(scrollBar);
+
+/* ══════════════════════════════════════════════════════════════
+   10. STARTUP
+   ══════════════════════════════════════════════════════════════ */
+syncEditor();
+syncClear();
+syncExportState();
+syncSwatches();
+renderSidebar();
+renderAnim();
+(async ()=>{
+  const urls=['/fonts/SpaceGrotesk.ttf'];
+  for(const u of urls){
+    try{ const r=await fetch(u); if(!r.ok) continue;
+      setFont(opentype.parse(await r.arrayBuffer()), 'Demo font — load your own'); return; }catch(e){}
+  }
+  setNote('Load an .otf to get started.');
+})();
+
+</script>
+</body>
+</html>
